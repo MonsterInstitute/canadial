@@ -5,7 +5,7 @@ import Link from "next/link";
 // `home` controls where the closing call-to-action points (language-aware).
 
 function Phone({ number }: { number: string }) {
-  const tel = "+1" + number.replace(/\D/g, "");
+  const tel = "+" + number.replace(/\D/g, "");
   return (
     <a className="font-semibold text-canada underline" href={`tel:${tel}`}>
       {number}

@@ -50,7 +50,7 @@ function RichText({ text }: { text: string }) {
           return (
             <a
               key={i}
-              href={`tel:+1${part.replace(/\D/g, "")}`}
+              href={`tel:+${part.replace(/\D/g, "")}`}
               className="font-semibold text-canada underline"
             >
               {part}
