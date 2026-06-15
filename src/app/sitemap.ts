@@ -51,20 +51,24 @@ export default async function sitemap({
       });
     }
 
-    // Monthly spam-call reports.
-    entries.push({
-      url: `${SITE_URL}/reports`,
-      lastModified: now,
-      changeFrequency: "weekly",
-      priority: 0.7,
-    });
-    for (const { year, month } of await getReportableMonths()) {
+    // Monthly spam-call reports (English + each non-English locale).
+    const reportMonths = await getReportableMonths();
+    const reportRoots = ["", ...LANGS.map((l) => l.path)]; // "" = English
+    for (const root of reportRoots) {
       entries.push({
-        url: `${SITE_URL}/reports/${year}/${String(month).padStart(2, "0")}`,
+        url: `${SITE_URL}${root}/reports`,
         lastModified: now,
-        changeFrequency: "monthly",
-        priority: 0.8,
+        changeFrequency: "weekly",
+        priority: 0.7,
       });
+      for (const { year, month } of reportMonths) {
+        entries.push({
+          url: `${SITE_URL}${root}/reports/${year}/${String(month).padStart(2, "0")}`,
+          lastModified: now,
+          changeFrequency: "monthly",
+          priority: root === "" ? 0.8 : 0.6,
+        });
+      }
     }
 
     // Know Your Rights — English plus one per non-English locale.

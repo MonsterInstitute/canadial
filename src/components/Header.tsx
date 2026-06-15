@@ -10,6 +10,7 @@ export default function Header() {
   const lang = langFromPath(pathname);
   const home = lang === "en" ? "/" : `/${lang}`;
   const rights = localizePath("/rights", lang);
+  const reports = localizePath("/reports", lang);
   // Translated nav labels (English has no CONTENT entry → fall back).
   const t = lang === "en" ? null : CONTENT[lang];
   const rightsLabel = t?.rightsNav ?? "Know Your Rights";
@@ -63,7 +64,7 @@ export default function Header() {
             <Link href={rights} className="hidden hover:text-canada sm:inline">
               {rightsLabel}
             </Link>
-            <Link href="/reports" className="hidden hover:text-canada sm:inline">
+            <Link href={reports} className="hidden hover:text-canada sm:inline">
               {reportsLabel}
             </Link>
             <Link href="/api-docs" className="hidden hover:text-canada md:inline">
