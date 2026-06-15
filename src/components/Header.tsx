@@ -66,6 +66,9 @@ export default function Header() {
             <Link href="/reports" className="hidden hover:text-canada sm:inline">
               {reportsLabel}
             </Link>
+            <Link href="/api-docs" className="hidden hover:text-canada md:inline">
+              API
+            </Link>
           </nav>
           <LanguageSelector />
         </div>

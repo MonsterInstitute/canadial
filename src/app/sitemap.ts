@@ -41,6 +41,16 @@ export default async function sitemap({
         priority: 0.9,
       });
     }
+    // Developer/API pages.
+    for (const path of ["/api-docs", "/pricing", "/api-keys"]) {
+      entries.push({
+        url: `${SITE_URL}${path}`,
+        lastModified: now,
+        changeFrequency: "monthly",
+        priority: 0.6,
+      });
+    }
+
     // Monthly spam-call reports.
     entries.push({
       url: `${SITE_URL}/reports`,

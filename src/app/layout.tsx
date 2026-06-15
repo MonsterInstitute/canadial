@@ -78,6 +78,12 @@ export default function RootLayout({
               <Link href="/rights" className="hover:text-canada">
                 Know Your Rights
               </Link>
+              <Link href="/api-docs" className="hover:text-canada">
+                API
+              </Link>
+              <Link href="/pricing" className="hover:text-canada">
+                Pricing
+              </Link>
               <a
                 href="https://lnnte-dncl.gc.ca/"
                 target="_blank"
