@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { getAllPhoneNumbers } from "@/lib/spam";
+import { LOCALES } from "@/lib/i18n";
 import { SITE_URL } from "@/lib/config";
 
 // Revalidate the sitemap hourly as new numbers get reported.
@@ -11,6 +12,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const entries: MetadataRoute.Sitemap = [
     { url: SITE_URL, lastModified: now, changeFrequency: "daily", priority: 1 },
   ];
+
+  // Language landing pages (skip "en" — that's the homepage above).
+  for (const loc of LOCALES) {
+    if (loc.code === "en") continue;
+    entries.push({
+      url: `${SITE_URL}${loc.path}`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.9,
+    });
+  }
 
   const numbers = await getAllPhoneNumbers();
 

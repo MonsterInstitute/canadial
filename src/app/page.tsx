@@ -1,10 +1,17 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
+import SloganRotator from "@/components/SloganRotator";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { supabaseAdmin } from "@/lib/supabase";
 import { formatPhone } from "@/lib/lookup";
 import { getAreaCodeCounts } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
-import { SITE_TAGLINE } from "@/lib/config";
+import { HREFLANG_ALTERNATES } from "@/lib/i18n";
+
+export const metadata: Metadata = {
+  alternates: { canonical: "/", languages: HREFLANG_ALTERNATES },
+};
 
 // Refresh the recent-reports list periodically.
 export const revalidate = 60;
@@ -57,7 +64,7 @@ export default async function Home() {
           🍁 Made for Canada
         </div>
         <h1 className="mb-3 max-w-2xl text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
-          {SITE_TAGLINE}
+          <SloganRotator />
         </h1>
         <p className="mb-8 max-w-xl text-zinc-600">
           Enter a phone number to see if it&apos;s spam, a scam, or a legitimate
@@ -65,6 +72,9 @@ export default async function Home() {
         </p>
         <div className="w-full max-w-xl">
           <SearchBar autoFocus />
+        </div>
+        <div className="mt-6">
+          <LanguageSwitcher current="en" />
         </div>
       </section>
 
