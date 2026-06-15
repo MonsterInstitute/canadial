@@ -101,7 +101,10 @@ export default function RootLayout({
               <Link href="/" className="hover:text-canada">
                 Home
               </Link>
-              <Link href="/#recent-reports" className="hover:text-canada">
+              <Link href="/rights" className="hover:text-canada">
+                Know Your Rights
+              </Link>
+              <Link href="/#recent-reports" className="hidden hover:text-canada sm:inline">
                 Recent reports
               </Link>
             </nav>
@@ -111,8 +114,51 @@ export default function RootLayout({
         <main className="flex flex-1 flex-col">{children}</main>
 
         <footer className="border-t border-zinc-200 mt-16">
-          <div className="mx-auto w-full max-w-3xl px-4 py-6 text-center text-sm text-zinc-500">
-            © 2026 {SITE_NAME} — {SITE_TAGLINE.split("—")[0].trim()}
+          <div className="mx-auto w-full max-w-3xl px-4 py-10 text-sm text-zinc-600">
+            <p className="text-center text-base font-medium text-zinc-800">
+              Canadial was built because Canadians deserve to feel safe when
+              their phone rings. 🍁
+            </p>
+
+            <nav className="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2">
+              <Link href="/rights" className="hover:text-canada">
+                Know Your Rights
+              </Link>
+              <a
+                href="https://lnnte-dncl.gc.ca/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-canada"
+              >
+                Register for Do Not Call List
+              </a>
+              <a
+                href="https://antifraudcentre-centreantifraude.ca/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-canada"
+              >
+                Report Fraud
+              </a>
+              <a
+                href="https://crtc.gc.ca/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-canada"
+              >
+                Report to CRTC
+              </a>
+            </nav>
+
+            <p className="mx-auto mt-6 max-w-2xl text-center text-xs leading-relaxed text-zinc-400">
+              Canadial is an independent, community-powered phone lookup service.
+              We are not affiliated with the Government of Canada, CRA, or any
+              telecom company. Information is provided for protection purposes
+              only.
+            </p>
+            <p className="mt-4 text-center text-xs text-zinc-400">
+              © 2026 {SITE_NAME}
+            </p>
           </div>
         </footer>
       </body>

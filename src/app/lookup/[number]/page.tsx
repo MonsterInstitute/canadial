@@ -93,6 +93,112 @@ function Badge({
   );
 }
 
+// Warm, non-judgmental reassurance shown below the badge for spam numbers.
+function ReassuranceBox({
+  tone,
+  title,
+  children,
+}: {
+  tone: "blue" | "grey";
+  title: string;
+  children: React.ReactNode;
+}) {
+  const styles =
+    tone === "blue"
+      ? "bg-blue-50 border-blue-200 text-blue-900"
+      : "bg-zinc-50 border-zinc-200 text-zinc-700";
+  return (
+    <div className={`mt-4 rounded-xl border p-5 ${styles}`}>
+      <p className="font-semibold leading-snug">{title}</p>
+      <p className="mt-1.5 text-sm leading-relaxed">{children}</p>
+    </div>
+  );
+}
+
+function Reassurance({
+  reports,
+  mostCommonType,
+}: {
+  reports: { type?: string | null; comment?: string | null }[];
+  mostCommonType: string | null;
+}) {
+  const types = new Set(
+    [mostCommonType, ...reports.map((r) => r.type)].filter(Boolean) as string[]
+  );
+  const commentText = reports
+    .map((r) => r.comment ?? "")
+    .join(" ")
+    .toLowerCase();
+
+  const isCraScam = types.has("Scam") && /cra|tax|arrest/.test(commentText);
+  const isDebt = types.has("Debt Collector");
+  const isTelemarketer = !isCraScam && !isDebt && types.has("Telemarketer");
+
+  if (isCraScam) {
+    return (
+      <ReassuranceBox tone="blue" title="Take a breath — this is a known scam. 🍁">
+        Real CRA agents never threaten arrest, never ask for gift cards, and
+        never demand immediate payment over the phone. If you&apos;re worried
+        about your taxes, call CRA directly at{" "}
+        <a className="font-semibold underline" href="tel:+18009598281">
+          1-800-959-8281
+        </a>
+        . You are not in trouble.
+      </ReassuranceBox>
+    );
+  }
+  if (isDebt) {
+    return (
+      <ReassuranceBox
+        tone="blue"
+        title="You have rights. Canadian law protects you. 🍁"
+      >
+        Debt collectors cannot threaten you, call before 7am or after 9pm, or
+        contact your employer. You don&apos;t have to face this alone. Learn
+        about your rights at the{" "}
+        <a
+          className="font-semibold underline"
+          href="https://www.canada.ca/en/financial-consumer-agency.html"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Financial Consumer Agency of Canada
+        </a>
+        .
+      </ReassuranceBox>
+    );
+  }
+  if (isTelemarketer) {
+    return (
+      <ReassuranceBox
+        tone="grey"
+        title="Tired of unwanted calls? You can stop most of them for free."
+      >
+        Register your number at{" "}
+        <a
+          className="font-semibold underline"
+          href="https://lnnte-dncl.gc.ca/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Canada&apos;s Do Not Call List
+        </a>{" "}
+        — it only takes 2 minutes and it&apos;s free.
+      </ReassuranceBox>
+    );
+  }
+  return (
+    <ReassuranceBox
+      tone="grey"
+      title="Don't call back. Don't press any numbers."
+    >
+      If this call made you worried, you&apos;re not alone — millions of
+      Canadians receive scam calls every year. Report it below to protect
+      others.
+    </ReassuranceBox>
+  );
+}
+
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
   const pretty = formatPhone(number);
@@ -230,6 +336,14 @@ export default async function LookupPage({ params }: Props) {
           </div>
         )}
       </section>
+
+      {/* Warm reassurance tailored to the kind of spam */}
+      {result.type === "spam" && (
+        <Reassurance
+          reports={result.data.reports ?? []}
+          mostCommonType={result.data.most_common_type}
+        />
+      )}
 
       {/* Report form */}
       <section className="mt-8">

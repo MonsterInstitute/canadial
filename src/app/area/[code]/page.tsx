@@ -42,6 +42,17 @@ export default async function AreaPage({ params }: Props) {
   const region = regionForCode(code);
   const otherCodes = AREA_CODES.filter((a) => a.code !== code).slice(0, 12);
 
+  // Community stats, derived from the per-number aggregates we already have.
+  const reportTotal = numbers.reduce((s, n) => s + n.report_count, 0);
+  const typeBuckets: Record<string, number> = {};
+  for (const n of numbers) {
+    const t = n.most_common_type || "Other";
+    typeBuckets[t] = (typeBuckets[t] ?? 0) + 1;
+  }
+  const topType =
+    Object.entries(typeBuckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const typeCount = (t: string) => typeBuckets[t] ?? 0;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -105,6 +116,40 @@ export default async function AreaPage({ params }: Props) {
           )}
         </p>
       </header>
+
+      {numbers.length > 0 && (
+        <section className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-zinc-600">
+            <span>
+              <strong className="text-zinc-900">{reportTotal}</strong> total
+              reports
+            </span>
+            <span>
+              <strong className="text-canada">{typeCount("Scam")}</strong> Scams
+            </span>
+            <span>
+              <strong className="text-canada">{typeCount("Telemarketer")}</strong>{" "}
+              Telemarketers
+            </span>
+            <span>
+              <strong className="text-canada">{typeCount("Robocall")}</strong>{" "}
+              Robocalls
+            </span>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-zinc-600">
+            Canadians in the {region ?? code} area have reported{" "}
+            <strong>{numbers.length}</strong> suspicious number
+            {numbers.length === 1 ? "" : "s"}.
+            {topType ? (
+              <>
+                {" "}
+                The most common type is <strong>{topType}</strong>.
+              </>
+            ) : null}{" "}
+            Help your community by reporting calls you receive.
+          </p>
+        </section>
+      )}
 
       <div className="mt-5">
         <SearchBar />
