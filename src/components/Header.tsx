@@ -60,6 +60,9 @@ export default function Header() {
             <Link href={rights} className="hidden hover:text-canada sm:inline">
               Know Your Rights
             </Link>
+            <Link href="/reports" className="hidden hover:text-canada md:inline">
+              Reports
+            </Link>
             <Link href={recent} className="hidden hover:text-canada md:inline">
               Recent reports
             </Link>

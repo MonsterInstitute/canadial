@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { getAllPhoneNumbers } from "@/lib/spam";
+import { getReportableMonths } from "@/lib/reports";
 import { LOCALES } from "@/lib/i18n";
 import { CHUNK_SIZE, planShards, lookupPrefix } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
@@ -40,6 +41,22 @@ export default async function sitemap({
         priority: 0.9,
       });
     }
+    // Monthly spam-call reports.
+    entries.push({
+      url: `${SITE_URL}/reports`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.7,
+    });
+    for (const { year, month } of await getReportableMonths()) {
+      entries.push({
+        url: `${SITE_URL}/reports/${year}/${String(month).padStart(2, "0")}`,
+        lastModified: now,
+        changeFrequency: "monthly",
+        priority: 0.8,
+      });
+    }
+
     // Know Your Rights — English plus one per non-English locale.
     entries.push({
       url: `${SITE_URL}/rights`,
