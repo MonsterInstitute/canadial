@@ -21,26 +21,62 @@ export type LocaleMeta = {
   flag: string;
   nativeName: string;
   englishName: string;
+  short: string; // compact label for the header selector
   dir: "ltr" | "rtl";
   htmlLang: string;
 };
 
 export const LOCALES: LocaleMeta[] = [
-  { code: "en", path: "/", hreflang: "en", flag: "🇨🇦", nativeName: "English", englishName: "English", dir: "ltr", htmlLang: "en-CA" },
-  { code: "zh", path: "/zh", hreflang: "zh-Hans", flag: "🇨🇳", nativeName: "中文", englishName: "Simplified Chinese", dir: "ltr", htmlLang: "zh-Hans" },
-  { code: "zh-tw", path: "/zh-tw", hreflang: "zh-Hant", flag: "🇹🇼", nativeName: "繁體", englishName: "Traditional Chinese", dir: "ltr", htmlLang: "zh-Hant" },
-  { code: "pa", path: "/pa", hreflang: "pa", flag: "🇮🇳", nativeName: "ਪੰਜਾਬੀ", englishName: "Punjabi", dir: "ltr", htmlLang: "pa" },
-  { code: "tl", path: "/tl", hreflang: "tl", flag: "🇵🇭", nativeName: "Filipino", englishName: "Filipino", dir: "ltr", htmlLang: "tl" },
-  { code: "ar", path: "/ar", hreflang: "ar", flag: "🇸🇦", nativeName: "عربي", englishName: "Arabic", dir: "rtl", htmlLang: "ar" },
-  { code: "hi", path: "/hi", hreflang: "hi", flag: "🇮🇳", nativeName: "हिंदी", englishName: "Hindi", dir: "ltr", htmlLang: "hi" },
-  { code: "fr", path: "/fr", hreflang: "fr", flag: "🇫🇷", nativeName: "Français", englishName: "French", dir: "ltr", htmlLang: "fr" },
-  { code: "es", path: "/es", hreflang: "es", flag: "🇪🇸", nativeName: "Español", englishName: "Spanish", dir: "ltr", htmlLang: "es" },
-  { code: "ko", path: "/ko", hreflang: "ko", flag: "🇰🇷", nativeName: "한국어", englishName: "Korean", dir: "ltr", htmlLang: "ko" },
-  { code: "vi", path: "/vi", hreflang: "vi", flag: "🇻🇳", nativeName: "Tiếng Việt", englishName: "Vietnamese", dir: "ltr", htmlLang: "vi" },
+  { code: "en", path: "/", hreflang: "en", flag: "🇨🇦", nativeName: "English", englishName: "English", short: "EN", dir: "ltr", htmlLang: "en-CA" },
+  { code: "zh", path: "/zh", hreflang: "zh-Hans", flag: "🇨🇳", nativeName: "中文", englishName: "Simplified Chinese", short: "中文", dir: "ltr", htmlLang: "zh-Hans" },
+  { code: "zh-tw", path: "/zh-tw", hreflang: "zh-Hant", flag: "🇹🇼", nativeName: "繁體中文", englishName: "Traditional Chinese", short: "繁體", dir: "ltr", htmlLang: "zh-Hant" },
+  { code: "pa", path: "/pa", hreflang: "pa", flag: "🇮🇳", nativeName: "ਪੰਜਾਬੀ", englishName: "Punjabi", short: "ਪੰਜਾਬੀ", dir: "ltr", htmlLang: "pa" },
+  { code: "tl", path: "/tl", hreflang: "tl", flag: "🇵🇭", nativeName: "Filipino", englishName: "Filipino", short: "FIL", dir: "ltr", htmlLang: "tl" },
+  { code: "ar", path: "/ar", hreflang: "ar", flag: "🇸🇦", nativeName: "عربي", englishName: "Arabic", short: "عربي", dir: "rtl", htmlLang: "ar" },
+  { code: "hi", path: "/hi", hreflang: "hi", flag: "🇮🇳", nativeName: "हिंदी", englishName: "Hindi", short: "हिंदी", dir: "ltr", htmlLang: "hi" },
+  { code: "fr", path: "/fr", hreflang: "fr", flag: "🇫🇷", nativeName: "Français", englishName: "French", short: "FR", dir: "ltr", htmlLang: "fr" },
+  { code: "es", path: "/es", hreflang: "es", flag: "🇪🇸", nativeName: "Español", englishName: "Spanish", short: "ES", dir: "ltr", htmlLang: "es" },
+  { code: "ko", path: "/ko", hreflang: "ko", flag: "🇰🇷", nativeName: "한국어", englishName: "Korean", short: "한국어", dir: "ltr", htmlLang: "ko" },
+  { code: "vi", path: "/vi", hreflang: "vi", flag: "🇻🇳", nativeName: "Tiếng Việt", englishName: "Vietnamese", short: "VI", dir: "ltr", htmlLang: "vi" },
 ];
 
 export function getLocale(code: string): LocaleMeta | undefined {
   return LOCALES.find((l) => l.code === code);
+}
+
+const NON_EN_CODES = LOCALES.filter((l) => l.code !== "en").map((l) => l.code);
+
+// The locale a given path belongs to (defaults to "en").
+export function langFromPath(pathname: string): string {
+  const seg = pathname.split("/")[1] ?? "";
+  return NON_EN_CODES.includes(seg) ? seg : "en";
+}
+
+// The English/base path with any leading locale prefix stripped.
+export function basePath(pathname: string): string {
+  const seg = pathname.split("/")[1] ?? "";
+  if (NON_EN_CODES.includes(seg)) {
+    const rest = "/" + pathname.split("/").slice(2).join("/");
+    return rest === "/" ? "/" : rest.replace(/\/+$/, "");
+  }
+  return pathname === "" ? "/" : pathname;
+}
+
+// Only these page types have per-language variants. Everything else
+// (e.g. /rights) exists in English only.
+export function hasLanguageVariant(base: string): boolean {
+  return base === "/" || base.startsWith("/lookup/") || base.startsWith("/area/");
+}
+
+// Map any path to its equivalent in `lang`. English-only pages fall back to
+// that language's home so we never link to a non-existent translated page.
+export function localizePath(pathname: string, lang: string): string {
+  const base = basePath(pathname);
+  if (!hasLanguageVariant(base)) {
+    return lang === "en" ? base : `/${lang}`;
+  }
+  if (lang === "en") return base;
+  return base === "/" ? `/${lang}` : `/${lang}${base}`;
 }
 
 // hreflang -> path map for metadata.alternates.languages.

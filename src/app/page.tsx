@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import SloganRotator from "@/components/SloganRotator";
-import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { supabaseAdmin } from "@/lib/supabase";
 import { formatPhone } from "@/lib/lookup";
 import { getAreaCodeCounts } from "@/lib/spam";
@@ -72,9 +71,6 @@ export default async function Home() {
         </p>
         <div className="w-full max-w-xl">
           <SearchBar autoFocus />
-        </div>
-        <div className="mt-6">
-          <LanguageSwitcher current="en" />
         </div>
       </section>
 

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import SloganRotator from "@/components/SloganRotator";
-import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { AREA_CONTENT, CONTENT, getLocale } from "@/lib/i18n";
 import { getAreaCodeCounts } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
@@ -35,9 +34,6 @@ export default async function LanguagePage({ code }: { code: string }) {
         <p className="mb-8 max-w-xl text-zinc-600">{t.intro}</p>
         <div className="w-full max-w-xl">
           <SearchBar buttonLabel={t.searchButton} lang={code} />
-        </div>
-        <div className="mt-6">
-          <LanguageSwitcher current={code} />
         </div>
       </section>
 
