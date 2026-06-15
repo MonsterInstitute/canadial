@@ -1,65 +1,91 @@
-import Image from "next/image";
+import Link from "next/link";
+import SearchBar from "@/components/SearchBar";
+import { supabase } from "@/lib/supabase";
+import { formatPhone } from "@/lib/lookup";
+import { SITE_TAGLINE } from "@/lib/config";
 
-export default function Home() {
+// Refresh the recent-reports list periodically.
+export const revalidate = 60;
+
+type RecentReport = {
+  id: string | number;
+  phone_number: string;
+  type: string | null;
+  comment: string | null;
+  is_spam: boolean | null;
+  created_at: string;
+};
+
+async function getRecentReports(): Promise<RecentReport[]> {
+  try {
+    const { data, error } = await supabase
+      .from("spam_reports")
+      .select("id, phone_number, type, comment, is_spam, created_at")
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (error) return [];
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export default async function Home() {
+  const reports = await getRecentReports();
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="mx-auto w-full max-w-3xl px-4">
+      <section className="flex flex-col items-center py-16 text-center sm:py-24">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-red-50 px-3 py-1 text-sm font-medium text-canada">
+          🍁 Made for Canada
+        </div>
+        <h1 className="mb-3 max-w-2xl text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
+          {SITE_TAGLINE}
+        </h1>
+        <p className="mb-8 max-w-xl text-zinc-600">
+          Enter a phone number to see if it&apos;s spam, a scam, or a legitimate
+          business.
+        </p>
+        <div className="w-full max-w-xl">
+          <SearchBar autoFocus />
+        </div>
+      </section>
+
+      <section id="recent-reports" className="pb-8">
+        <h2 className="mb-4 text-xl font-semibold text-zinc-900">
+          Latest spam reports
+        </h2>
+        {reports.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-zinc-300 p-6 text-center text-zinc-500">
+            No reports yet. Be the first to report a number.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        ) : (
+          <ul className="divide-y divide-zinc-200 overflow-hidden rounded-lg border border-zinc-200">
+            {reports.map((r) => (
+              <li key={r.id}>
+                <Link
+                  href={`/lookup/${r.phone_number}`}
+                  className="flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-zinc-900">
+                      {formatPhone(r.phone_number)}
+                    </div>
+                    {r.comment && (
+                      <p className="truncate text-sm text-zinc-500">
+                        {r.comment}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-canada">
+                    {r.type || "Spam"}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
