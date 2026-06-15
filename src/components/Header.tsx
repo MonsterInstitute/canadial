@@ -18,7 +18,7 @@ export default function Header() {
         <Link
           href={home}
           className="flex items-center gap-2.5"
-          aria-label="Canadial — Phone Protection"
+          aria-label="Canadial — Know Who Called"
         >
           <svg
             width={32.4}
@@ -47,7 +47,7 @@ export default function Header() {
               className="mt-0.5 font-medium"
               style={{ color: "#6b7280", fontSize: "11px" }}
             >
-              Phone Protection
+              Know Who Called
             </span>
           </span>
         </Link>

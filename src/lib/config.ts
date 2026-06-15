@@ -4,4 +4,4 @@ export const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, '') || 'https://canadial.com'
 
 export const SITE_NAME = 'Canadial'
-export const SITE_TAGLINE = "Canada's phone lookup — find out who called"
+export const SITE_TAGLINE = "Know Who Called"
