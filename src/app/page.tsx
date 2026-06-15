@@ -23,9 +23,15 @@ async function getRecentReports(): Promise<RecentReport[]> {
       .select("id, phone_number, type, comment, is_spam, created_at")
       .order("created_at", { ascending: false })
       .limit(10);
-    if (error) return [];
+    if (error) {
+      // Surface the real reason (e.g. RLS / missing grant) instead of silently
+      // rendering "No reports yet".
+      console.error("getRecentReports failed:", error.message);
+      return [];
+    }
     return data ?? [];
-  } catch {
+  } catch (e) {
+    console.error("getRecentReports threw:", e);
     return [];
   }
 }
