@@ -40,6 +40,22 @@ export default async function sitemap({
         priority: 0.9,
       });
     }
+    // Know Your Rights — English plus one per non-English locale.
+    entries.push({
+      url: `${SITE_URL}/rights`,
+      lastModified: now,
+      changeFrequency: "monthly",
+      priority: 0.7,
+    });
+    for (const l of LANGS) {
+      entries.push({
+        url: `${SITE_URL}${l.path}/rights`,
+        lastModified: now,
+        changeFrequency: "monthly",
+        priority: 0.6,
+      });
+    }
+
     // Area-code pages — English plus one per non-English locale.
     const areaCodes = new Set<string>();
     for (const n of numbers) areaCodes.add(n.slice(0, 3));

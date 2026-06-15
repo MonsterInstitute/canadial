@@ -65,7 +65,12 @@ export function basePath(pathname: string): string {
 // Only these page types have per-language variants. Everything else
 // (e.g. /rights) exists in English only.
 export function hasLanguageVariant(base: string): boolean {
-  return base === "/" || base.startsWith("/lookup/") || base.startsWith("/area/");
+  return (
+    base === "/" ||
+    base === "/rights" ||
+    base.startsWith("/lookup/") ||
+    base.startsWith("/area/")
+  );
 }
 
 // Map any path to its equivalent in `lang`. English-only pages fall back to
