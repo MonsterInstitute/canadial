@@ -3,14 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import LanguageSelector from "./LanguageSelector";
-import { langFromPath, localizePath } from "@/lib/i18n";
+import { CONTENT, langFromPath, localizePath } from "@/lib/i18n";
 
 export default function Header() {
   const pathname = usePathname() || "/";
   const lang = langFromPath(pathname);
   const home = lang === "en" ? "/" : `/${lang}`;
-  const recent = `${home === "/" ? "" : home}#recent-reports`;
   const rights = localizePath("/rights", lang);
+  // Translated nav labels (English has no CONTENT entry → fall back).
+  const t = lang === "en" ? null : CONTENT[lang];
+  const rightsLabel = t?.rightsNav ?? "Know Your Rights";
+  const reportsLabel = t?.reportsNav ?? "Reports";
 
   return (
     <header className="border-b border-zinc-200">
@@ -58,13 +61,10 @@ export default function Header() {
               Home
             </Link>
             <Link href={rights} className="hidden hover:text-canada sm:inline">
-              Know Your Rights
+              {rightsLabel}
             </Link>
-            <Link href="/reports" className="hidden hover:text-canada md:inline">
-              Reports
-            </Link>
-            <Link href={recent} className="hidden hover:text-canada md:inline">
-              Recent reports
+            <Link href="/reports" className="hidden hover:text-canada sm:inline">
+              {reportsLabel}
             </Link>
           </nav>
           <LanguageSelector />

@@ -101,12 +101,16 @@ export type LangContent = {
   rightsTitle: string;
   rights: string[];
   backToEnglish: string;
+  reportsNav: string;
+  rightsNav: string;
 };
 
 // Translations for the non-English landing pages.
 // NOTE: Safety/legal copy — review by native speakers recommended.
 export const CONTENT: Record<string, LangContent> = {
   zh: {
+    reportsNav: "报告",
+    rightsNav: "了解您的权利",
     heading: "加拿大电话查询 — 查明谁打来的",
     intro: "查询任何加拿大电话号码，了解谁打来的电话，以及它是否是已知的诈骗电话。",
     description: "免费查询加拿大电话号码，识别诈骗、骚扰和推销电话（简体中文）。",
@@ -123,6 +127,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "查看英文版",
   },
   "zh-tw": {
+    reportsNav: "報告",
+    rightsNav: "了解您的權利",
     heading: "加拿大電話查詢 — 查明誰打來的",
     intro: "查詢任何加拿大電話號碼，了解誰打來的電話，以及它是否為已知的詐騙電話。",
     description: "免費查詢加拿大電話號碼，辨識詐騙、騷擾和推銷電話（繁體中文）。",
@@ -139,6 +145,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "查看英文版",
   },
   pa: {
+    reportsNav: "ਰਿਪੋਰਟਾਂ",
+    rightsNav: "ਆਪਣੇ ਹੱਕ ਜਾਣੋ",
     heading: "ਕੈਨੇਡਾ ਫ਼ੋਨ ਲੁੱਕਅੱਪ — ਪਤਾ ਕਰੋ ਕਿਸਨੇ ਫ਼ੋਨ ਕੀਤਾ",
     intro:
       "ਕਿਸੇ ਵੀ ਕੈਨੇਡੀਅਨ ਫ਼ੋਨ ਨੰਬਰ ਦੀ ਖੋਜ ਕਰੋ ਅਤੇ ਜਾਣੋ ਕਿ ਕਿਸਨੇ ਕਾਲ ਕੀਤੀ ਅਤੇ ਕੀ ਇਹ ਕੋਈ ਜਾਣਿਆ-ਪਛਾਣਿਆ ਧੋਖਾ ਹੈ।",
@@ -156,6 +164,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "ਅੰਗਰੇਜ਼ੀ ਵਿੱਚ ਵੇਖੋ",
   },
   tl: {
+    reportsNav: "Mga Ulat",
+    rightsNav: "Alamin ang Iyong mga Karapatan",
     heading: "Canada Phone Lookup — Alamin Kung Sino ang Tumawag",
     intro:
       "Hanapin ang anumang numero ng telepono sa Canada para malaman kung sino ang tumawag at kung ito ay kilalang scam.",
@@ -173,6 +183,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "Tingnan sa Ingles",
   },
   ar: {
+    reportsNav: "التقارير",
+    rightsNav: "اعرف حقوقك",
     heading: "البحث عن أرقام الهاتف في كندا — اعرف من اتصل بك",
     intro: "ابحث عن أي رقم هاتف كندي لمعرفة من اتصل بك وما إذا كان احتيالًا معروفًا.",
     description: "ابحث عن أرقام الهاتف الكندية وتحقق من عمليات الاحتيال (بالعربية).",
@@ -189,6 +201,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "عرض بالإنجليزية",
   },
   hi: {
+    reportsNav: "रिपोर्ट",
+    rightsNav: "अपने अधिकार जानें",
     heading: "कनाडा फोन लुकअप — जानें किसने कॉल किया",
     intro:
       "किसी भी कैनेडियन फ़ोन नंबर को खोजें और जानें कि किसने कॉल किया और क्या यह कोई जाना-पहचाना घोटाला है।",
@@ -206,6 +220,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "अंग्रेज़ी में देखें",
   },
   fr: {
+    reportsNav: "Rapports",
+    rightsNav: "Vos droits",
     heading: "Recherche téléphonique au Canada — Découvrez qui a appelé",
     intro:
       "Recherchez n'importe quel numéro de téléphone canadien pour savoir qui a appelé et s'il s'agit d'une arnaque connue.",
@@ -224,6 +240,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "Voir en anglais",
   },
   es: {
+    reportsNav: "Informes",
+    rightsNav: "Sus derechos",
     heading: "Búsqueda telefónica en Canadá — Descubre quién llamó",
     intro:
       "Busca cualquier número de teléfono canadiense para saber quién llamó y si es una estafa conocida.",
@@ -242,6 +260,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "Ver en inglés",
   },
   ko: {
+    reportsNav: "보고서",
+    rightsNav: "권리 알기",
     heading: "캐나다 전화 조회 — 누가 전화했는지 알아보세요",
     intro: "캐나다 전화번호를 조회하여 누가 전화했는지, 알려진 사기 전화인지 확인하세요.",
     description: "캐나다 전화번호를 조회하고 사기 전화를 확인하세요 (한국어).",
@@ -258,6 +278,8 @@ export const CONTENT: Record<string, LangContent> = {
     backToEnglish: "영어로 보기",
   },
   vi: {
+    reportsNav: "Báo cáo",
+    rightsNav: "Biết quyền của bạn",
     heading: "Tra cứu số điện thoại Canada — Biết ai đã gọi",
     intro:
       "Tra cứu bất kỳ số điện thoại Canada nào để biết ai đã gọi và liệu đó có phải là lừa đảo đã biết hay không.",
