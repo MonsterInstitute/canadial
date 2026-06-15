@@ -1,10 +1,31 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { requestApiKey, type KeyState } from "@/app/api-keys/actions";
 
 const USES = ["Personal project", "Commercial app", "Research", "Enterprise"];
+
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } catch {
+          /* clipboard unavailable — ignore */
+        }
+      }}
+      className="shrink-0 rounded-lg border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-800 transition-colors hover:bg-green-100"
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -32,9 +53,12 @@ export default function ApiKeyForm() {
           Your API key is ready
         </h2>
         <p className="mt-1 text-sm text-green-800">{state.message}</p>
-        <code className="mt-4 block overflow-x-auto rounded-lg border border-green-200 bg-white px-4 py-3 font-mono text-sm">
-          {state.apiKey}
-        </code>
+        <div className="mt-4 flex items-stretch gap-2">
+          <code className="flex-1 overflow-x-auto rounded-lg border border-green-200 bg-white px-4 py-3 font-mono text-sm">
+            {state.apiKey}
+          </code>
+          <CopyButton value={state.apiKey} />
+        </div>
         <div className="mt-4 text-sm text-zinc-700">
           <p className="font-medium">Try it:</p>
           <pre className="mt-1 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs text-zinc-100">
