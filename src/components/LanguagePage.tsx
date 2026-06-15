@@ -2,14 +2,20 @@ import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import SloganRotator from "@/components/SloganRotator";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
-import { CONTENT, getLocale } from "@/lib/i18n";
+import { AREA_CONTENT, CONTENT, getLocale } from "@/lib/i18n";
+import { getAreaCodeCounts } from "@/lib/spam";
+import { regionForCode } from "@/lib/area-codes";
 
 // Shared layout for every non-English landing page. Content is driven entirely
 // by the locale's entry in CONTENT, so each route file is a thin wrapper.
-export default function LanguagePage({ code }: { code: string }) {
+export default async function LanguagePage({ code }: { code: string }) {
   const loc = getLocale(code);
   const t = CONTENT[code];
-  if (!loc || !t) return null;
+  const area = AREA_CONTENT[code];
+  if (!loc || !t || !area) return null;
+
+  const areaCodeCounts = await getAreaCodeCounts();
+  const areaCodes = Object.entries(areaCodeCounts).sort((a, b) => b[1] - a[1]);
 
   return (
     <div
@@ -54,6 +60,36 @@ export default function LanguagePage({ code }: { code: string }) {
           ))}
         </ul>
       </section>
+
+      {areaCodes.length > 0 && (
+        <section className="pb-12">
+          <h2 className="mb-4 text-xl font-semibold text-zinc-900">
+            {area.browseByAreaCode}
+          </h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            {areaCodes.map(([ac, count]) => {
+              const region = regionForCode(ac);
+              return (
+                <Link
+                  key={ac}
+                  href={`/${code}/area/${ac}`}
+                  className="flex flex-col rounded-lg border border-zinc-200 px-4 py-3 transition-colors hover:border-canada hover:bg-red-50"
+                >
+                  <span className="text-lg font-bold text-zinc-900">{ac}</span>
+                  {region && (
+                    <span className="truncate text-xs text-zinc-500">
+                      {region}
+                    </span>
+                  )}
+                  <span className="mt-1 text-xs font-medium text-canada">
+                    {count}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="pb-12">
         <Link

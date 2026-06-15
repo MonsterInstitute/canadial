@@ -40,7 +40,7 @@ export default async function sitemap({
         priority: 0.9,
       });
     }
-    // Area-code pages.
+    // Area-code pages — English plus one per non-English locale.
     const areaCodes = new Set<string>();
     for (const n of numbers) areaCodes.add(n.slice(0, 3));
     for (const code of areaCodes) {
@@ -50,6 +50,14 @@ export default async function sitemap({
         changeFrequency: "daily",
         priority: 0.8,
       });
+      for (const l of LANGS) {
+        entries.push({
+          url: `${SITE_URL}${l.path}/area/${code}`,
+          lastModified: now,
+          changeFrequency: "daily",
+          priority: 0.7,
+        });
+      }
     }
     return entries;
   }

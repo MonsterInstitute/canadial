@@ -528,3 +528,29 @@ export const LOOKUP_CONTENT: Record<string, LookupStrings> = {
   },
 };
 
+export type AreaStrings = {
+  title: string; // "[code]" placeholder
+  description: string; // "[code]" placeholder
+  summary: string; // "[region]" "[count]" "[type]" placeholders
+  noNumbers: string; // "[code]" placeholder
+  totalReports: string;
+  otherAreaCodes: string;
+  reports: string; // unit word, e.g. "reports"
+  browseByAreaCode: string;
+};
+
+// Strings for the multilingual area-code pages and the homepage area grid.
+// (Category names like Scam/Telemarketer stay English to match the badges.)
+export const AREA_CONTENT: Record<string, AreaStrings> = {
+  zh: { title: "[code] 区号的垃圾电话", description: "[code] 区号被举报的垃圾、诈骗和机器人电话号码。", summary: "[region] 地区的加拿大人已举报 [count] 个可疑号码。最常见的类型是 [type]。举报您接到的来电，帮助您的社区。", noNumbers: "[code] 区号暂无举报号码。", totalReports: "总举报数", otherAreaCodes: "其他区号", reports: "条举报", browseByAreaCode: "按区号浏览" },
+  "zh-tw": { title: "[code] 區號的垃圾電話", description: "[code] 區號被舉報的垃圾、詐騙和機器人電話號碼。", summary: "[region] 地區的加拿大人已舉報 [count] 個可疑號碼。最常見的類型是 [type]。舉報您接到的來電，幫助您的社區。", noNumbers: "[code] 區號暫無舉報號碼。", totalReports: "總舉報數", otherAreaCodes: "其他區號", reports: "則舉報", browseByAreaCode: "按區號瀏覽" },
+  pa: { title: "[code] ਏਰੀਆ ਕੋਡ ਦੀਆਂ ਸਪੈਮ ਕਾਲਾਂ", description: "[code] ਏਰੀਆ ਕੋਡ ਵਿੱਚ ਰਿਪੋਰਟ ਕੀਤੇ ਸਪੈਮ, ਧੋਖਾ ਅਤੇ ਰੋਬੋਕਾਲ ਨੰਬਰ।", summary: "[region] ਖੇਤਰ ਦੇ ਕੈਨੇਡੀਅਨਾਂ ਨੇ [count] ਸ਼ੱਕੀ ਨੰਬਰ ਰਿਪੋਰਟ ਕੀਤੇ ਹਨ। ਸਭ ਤੋਂ ਆਮ ਕਿਸਮ [type] ਹੈ। ਆਪਣੀਆਂ ਕਾਲਾਂ ਰਿਪੋਰਟ ਕਰਕੇ ਆਪਣੇ ਭਾਈਚਾਰੇ ਦੀ ਮਦਦ ਕਰੋ।", noNumbers: "[code] ਏਰੀਆ ਕੋਡ ਵਿੱਚ ਹਾਲੇ ਕੋਈ ਨੰਬਰ ਰਿਪੋਰਟ ਨਹੀਂ ਹੋਇਆ।", totalReports: "ਕੁੱਲ ਰਿਪੋਰਟਾਂ", otherAreaCodes: "ਹੋਰ ਏਰੀਆ ਕੋਡ", reports: "ਰਿਪੋਰਟਾਂ", browseByAreaCode: "ਏਰੀਆ ਕੋਡ ਅਨੁਸਾਰ ਵੇਖੋ" },
+  tl: { title: "Mga spam call sa [code]", description: "Mga iniulat na spam, scam, at robocall na numero sa [code] area code.", summary: "Nag-ulat ang mga Canadian sa [region] ng [count] kahina-hinalang numero. Ang pinakakaraniwang uri ay [type]. Tulungan ang iyong komunidad sa pag-uulat ng mga tawag.", noNumbers: "Wala pang iniulat na numero sa [code] area code.", totalReports: "kabuuang ulat", otherAreaCodes: "Iba pang area code", reports: "ulat", browseByAreaCode: "Mag-browse ayon sa area code" },
+  ar: { title: "مكالمات مزعجة من الرمز [code]", description: "أرقام مزعجة واحتيالية وآلية تم الإبلاغ عنها في رمز المنطقة [code].", summary: "أبلغ الكنديون في منطقة [region] عن [count] رقمًا مشبوهًا. النوع الأكثر شيوعًا هو [type]. ساعد مجتمعك بالإبلاغ عن المكالمات التي تتلقاها.", noNumbers: "لا توجد أرقام مُبلغ عنها في رمز المنطقة [code] بعد.", totalReports: "إجمالي البلاغات", otherAreaCodes: "رموز مناطق أخرى", reports: "بلاغات", browseByAreaCode: "تصفح حسب رمز المنطقة" },
+  hi: { title: "[code] क्षेत्र कोड की स्पैम कॉल", description: "[code] क्षेत्र कोड में रिपोर्ट किए गए स्पैम, घोटाला और रोबोकॉल नंबर।", summary: "[region] क्षेत्र के कैनेडियनों ने [count] संदिग्ध नंबर रिपोर्ट किए हैं। सबसे आम प्रकार [type] है। अपनी कॉलों की रिपोर्ट करके अपने समुदाय की मदद करें।", noNumbers: "[code] क्षेत्र कोड में अभी कोई नंबर रिपोर्ट नहीं हुआ।", totalReports: "कुल रिपोर्ट", otherAreaCodes: "अन्य क्षेत्र कोड", reports: "रिपोर्ट", browseByAreaCode: "क्षेत्र कोड के अनुसार ब्राउज़ करें" },
+  fr: { title: "Appels indésirables de l'indicatif [code]", description: "Numéros indésirables, frauduleux et robotisés signalés dans l'indicatif régional [code].", summary: "Les Canadiens de la région [region] ont signalé [count] numéros suspects. Le type le plus courant est [type]. Aidez votre communauté en signalant les appels que vous recevez.", noNumbers: "Aucun numéro signalé dans l'indicatif [code] pour l'instant.", totalReports: "signalements au total", otherAreaCodes: "Autres indicatifs", reports: "signalements", browseByAreaCode: "Parcourir par indicatif" },
+  es: { title: "Llamadas spam del código [code]", description: "Números de spam, estafa y robollamadas reportados en el código de área [code].", summary: "Los canadienses de la zona [region] han reportado [count] números sospechosos. El tipo más común es [type]. Ayuda a tu comunidad reportando las llamadas que recibes.", noNumbers: "Aún no hay números reportados en el código de área [code].", totalReports: "reportes en total", otherAreaCodes: "Otros códigos de área", reports: "reportes", browseByAreaCode: "Explorar por código de área" },
+  ko: { title: "[code] 지역번호 스팸 전화", description: "[code] 지역번호에서 신고된 스팸, 사기, 로보콜 번호.", summary: "[region] 지역의 캐나다인들이 [count]개의 의심스러운 번호를 신고했습니다. 가장 흔한 유형은 [type]입니다. 받은 전화를 신고하여 커뮤니티를 도와주세요.", noNumbers: "[code] 지역번호에서 아직 신고된 번호가 없습니다.", totalReports: "총 신고 수", otherAreaCodes: "다른 지역번호", reports: "건 신고", browseByAreaCode: "지역번호로 찾아보기" },
+  vi: { title: "Cuộc gọi rác từ mã vùng [code]", description: "Các số rác, lừa đảo và robocall được báo cáo trong mã vùng [code].", summary: "Người Canada ở khu vực [region] đã báo cáo [count] số đáng ngờ. Loại phổ biến nhất là [type]. Hãy giúp cộng đồng bằng cách báo cáo các cuộc gọi bạn nhận được.", noNumbers: "Chưa có số nào được báo cáo trong mã vùng [code].", totalReports: "tổng số báo cáo", otherAreaCodes: "Mã vùng khác", reports: "báo cáo", browseByAreaCode: "Duyệt theo mã vùng" },
+};
+
