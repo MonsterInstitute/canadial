@@ -1,48 +1,40 @@
 import type { MetadataRoute } from "next";
-import { supabase } from "@/lib/supabase";
+import { getAllPhoneNumbers } from "@/lib/spam";
 import { SITE_URL } from "@/lib/config";
 
 // Revalidate the sitemap hourly as new numbers get reported.
 export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const staticPages: MetadataRoute.Sitemap = [
-    {
-      url: SITE_URL,
-      lastModified: new Date(),
-      changeFrequency: "daily",
-      priority: 1,
-    },
+  const now = new Date();
+
+  const entries: MetadataRoute.Sitemap = [
+    { url: SITE_URL, lastModified: now, changeFrequency: "daily", priority: 1 },
   ];
 
-  // One entry per unique reported phone number.
-  let numberPages: MetadataRoute.Sitemap = [];
-  try {
-    const { data } = await supabase
-      .from("spam_reports")
-      .select("phone_number, created_at")
-      .order("created_at", { ascending: false })
-      .limit(50000);
+  const numbers = await getAllPhoneNumbers();
 
-    if (data) {
-      const latestByNumber = new Map<string, string>();
-      for (const row of data) {
-        if (!latestByNumber.has(row.phone_number)) {
-          latestByNumber.set(row.phone_number, row.created_at);
-        }
-      }
-      numberPages = Array.from(latestByNumber.entries()).map(
-        ([phone, lastModified]) => ({
-          url: `${SITE_URL}/lookup/${phone}`,
-          lastModified: new Date(lastModified),
-          changeFrequency: "weekly",
-          priority: 0.7,
-        })
-      );
-    }
-  } catch {
-    // If the DB is unavailable, still return the static pages.
+  // Area-code landing pages, derived from the numbers we actually have.
+  const areaCodes = new Set<string>();
+  for (const n of numbers) areaCodes.add(n.slice(0, 3));
+  for (const code of areaCodes) {
+    entries.push({
+      url: `${SITE_URL}/area/${code}`,
+      lastModified: now,
+      changeFrequency: "daily",
+      priority: 0.8,
+    });
   }
 
-  return [...staticPages, ...numberPages];
+  // One entry per individual phone-number page.
+  for (const phone of numbers) {
+    entries.push({
+      url: `${SITE_URL}/lookup/${phone}`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.6,
+    });
+  }
+
+  return entries;
 }

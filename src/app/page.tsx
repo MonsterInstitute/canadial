@@ -1,7 +1,9 @@
 import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
-import { supabase } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase";
 import { formatPhone } from "@/lib/lookup";
+import { getAreaCodeCounts } from "@/lib/spam";
+import { regionForCode } from "@/lib/area-codes";
 import { SITE_TAGLINE } from "@/lib/config";
 
 // Refresh the recent-reports list periodically.
@@ -18,7 +20,7 @@ type RecentReport = {
 
 async function getRecentReports(): Promise<RecentReport[]> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("spam_reports")
       .select("id, phone_number, type, comment, is_spam, created_at")
       .order("created_at", { ascending: false })
@@ -37,7 +39,16 @@ async function getRecentReports(): Promise<RecentReport[]> {
 }
 
 export default async function Home() {
-  const reports = await getRecentReports();
+  const [reports, areaCodeCounts] = await Promise.all([
+    getRecentReports(),
+    getAreaCodeCounts(),
+  ]);
+
+  // Every area code with data, busiest first — gives crawlers a path to all
+  // area-code pages, and from there to every individual number page.
+  const areaCodes = Object.entries(areaCodeCounts).sort(
+    (a, b) => b[1] - a[1]
+  );
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4">
@@ -56,6 +67,36 @@ export default async function Home() {
           <SearchBar autoFocus />
         </div>
       </section>
+
+      {areaCodes.length > 0 && (
+        <section className="pb-12">
+          <h2 className="mb-4 text-xl font-semibold text-zinc-900">
+            Browse by area code
+          </h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            {areaCodes.map(([code, count]) => {
+              const region = regionForCode(code);
+              return (
+                <Link
+                  key={code}
+                  href={`/area/${code}`}
+                  className="flex flex-col rounded-lg border border-zinc-200 px-4 py-3 transition-colors hover:border-canada hover:bg-red-50"
+                >
+                  <span className="text-lg font-bold text-zinc-900">{code}</span>
+                  {region && (
+                    <span className="truncate text-xs text-zinc-500">
+                      {region}
+                    </span>
+                  )}
+                  <span className="mt-1 text-xs font-medium text-canada">
+                    {count} number{count === 1 ? "" : "s"}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section id="recent-reports" className="pb-8">
         <h2 className="mb-4 text-xl font-semibold text-zinc-900">

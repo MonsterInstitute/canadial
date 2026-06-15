@@ -1,9 +1,66 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
+import { SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
 
+// Cache each number page and regenerate hourly — keeps crawls cheap.
+export const revalidate = 3600;
+
 type Props = { params: Promise<{ number: string }> };
+
+type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;
+
+// Schema.org structured data: a breadcrumb plus an FAQ-style Q&A that mirrors
+// the page's verdict, for rich results.
+function buildJsonLd(number: string, pretty: string, result: LookupResult) {
+  const code = number.slice(0, 3);
+  const url = `${SITE_URL}/lookup/${number}`;
+
+  let answer: string;
+  if (result.type === "legitimate") {
+    const name = result.data?.name ? ` belonging to ${result.data.name}` : "";
+    answer = `${pretty} is a verified, legitimate phone number${name}.`;
+  } else if (result.type === "spam") {
+    const kind = result.data.most_common_type
+      ? ` as ${result.data.most_common_type}`
+      : "";
+    answer = `${pretty} has been reported ${result.data.report_count} time${
+      result.data.report_count === 1 ? "" : "s"
+    }${kind} and is likely spam or an unwanted call.`;
+  } else {
+    answer = `There are no spam reports for ${pretty} yet.`;
+  }
+
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: SITE_URL },
+          {
+            "@type": "ListItem",
+            position: 2,
+            name: `Area code ${code}`,
+            item: `${SITE_URL}/area/${code}`,
+          },
+          { "@type": "ListItem", position: 3, name: pretty, item: url },
+        ],
+      },
+      {
+        "@type": "FAQPage",
+        mainEntity: [
+          {
+            "@type": "Question",
+            name: `Is ${pretty} spam?`,
+            acceptedAnswer: { "@type": "Answer", text: answer },
+          },
+        ],
+      },
+    ],
+  };
+}
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { number } = await params;
@@ -59,8 +116,14 @@ export default async function LookupPage({ params }: Props) {
     );
   }
 
+  const jsonLd = buildJsonLd(normalizePhone(number), pretty, result);
+
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <Link href="/" className="text-sm text-zinc-500 hover:text-canada">
         ← Back to search
       </Link>

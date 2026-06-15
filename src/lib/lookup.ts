@@ -1,5 +1,5 @@
 import 'server-only'
-import { supabase } from './supabase'
+import { supabaseAdmin } from './supabase'
 import { normalizePhone } from './phone'
 
 // Re-export pure helpers so existing server-side imports keep working.
@@ -13,7 +13,7 @@ export async function lookupPhone(phone: string) {
   }
 
   // Check organizations first (legitimate numbers)
-  const { data: org } = await supabase
+  const { data: org } = await supabaseAdmin
     .from('organizations')
     .select('*')
     .eq('phone_number', normalized)
@@ -24,7 +24,7 @@ export async function lookupPhone(phone: string) {
   }
 
   // Check spam reports
-  const { data: reports } = await supabase
+  const { data: reports } = await supabaseAdmin
     .from('spam_reports')
     .select('*')
     .eq('phone_number', normalized)
