@@ -1,20 +1,20 @@
 import type { MetadataRoute } from "next";
 import { getAllPhoneNumbers } from "@/lib/spam";
 import { LOCALES } from "@/lib/i18n";
+import { CHUNK_SIZE, planShards, lookupPrefix } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
 
 // Revalidate hourly as new numbers get reported.
 export const revalidate = 3600;
 
-const LANGS = LOCALES.filter((l) => l.code !== "en"); // 10 non-English locales
+const LANGS = LOCALES.filter((l) => l.code !== "en");
 
-// Google caps each sitemap at 50,000 URLs. With ~4.4k numbers × 10 languages
-// (~44k) plus the core pages, a single file would blow past that, so we shard:
-// shard 0 = core pages + English lookups; shards 1..N = each language's lookups.
-const SHARDS: string[] = ["pages", ...LANGS.map((l) => l.code)];
-
+// One sitemap per (locale × 10k-number chunk), plus a core shard. The number of
+// chunks grows automatically with the database, so no shard ever exceeds
+// Google's 50,000-URL limit.
 export async function generateSitemaps() {
-  return SHARDS.map((_, id) => ({ id }));
+  const numbers = await getAllPhoneNumbers();
+  return planShards(numbers.length).map((_, id) => ({ id }));
 }
 
 export default async function sitemap({
@@ -22,16 +22,15 @@ export default async function sitemap({
 }: {
   id: Promise<string>;
 }): Promise<MetadataRoute.Sitemap> {
-  const idx = Number(await id);
-  const shard = SHARDS[idx] ?? "pages";
-  const now = new Date();
   const numbers = await getAllPhoneNumbers();
+  const shards = planShards(numbers.length);
+  const shard = shards[Number(await id)] ?? { kind: "core" as const };
+  const now = new Date();
 
-  if (shard === "pages") {
+  if (shard.kind === "core") {
     const entries: MetadataRoute.Sitemap = [
       { url: SITE_URL, lastModified: now, changeFrequency: "daily", priority: 1 },
     ];
-
     // Language landing pages.
     for (const l of LANGS) {
       entries.push({
@@ -41,7 +40,6 @@ export default async function sitemap({
         priority: 0.9,
       });
     }
-
     // Area-code pages.
     const areaCodes = new Set<string>();
     for (const n of numbers) areaCodes.add(n.slice(0, 3));
@@ -53,25 +51,20 @@ export default async function sitemap({
         priority: 0.8,
       });
     }
-
-    // English number pages.
-    for (const n of numbers) {
-      entries.push({
-        url: `${SITE_URL}/lookup/${n}`,
-        lastModified: now,
-        changeFrequency: "weekly",
-        priority: 0.6,
-      });
-    }
-
     return entries;
   }
 
-  // Language shard: that language's number pages.
-  return numbers.map((n) => ({
-    url: `${SITE_URL}/${shard}/lookup/${n}`,
+  // Lookup shard: one locale, one 10k slice of the (sorted, de-duplicated)
+  // number list. Slicing the same array by the same chunk size keeps shards
+  // consistent between generateSitemaps() and here.
+  const start = shard.chunk * CHUNK_SIZE;
+  const slice = numbers.slice(start, start + CHUNK_SIZE);
+  const prefix = lookupPrefix(shard.code);
+  const priority = shard.code === "en" ? 0.6 : 0.5;
+  return slice.map((n) => ({
+    url: `${SITE_URL}${prefix}/lookup/${n}`,
     lastModified: now,
     changeFrequency: "weekly",
-    priority: 0.5,
+    priority,
   }));
 }

@@ -1,37 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { SLOGANS } from "@/lib/i18n";
 
+// Shows one random slogan per page visit. It's picked once on mount and never
+// changes while the user is on the page — a new visit/refresh picks another.
+// (Starts deterministic for SSR, then randomizes on mount to avoid a hydration
+// mismatch from calling Math.random() during render.)
 export default function SloganRotator({ className = "" }: { className?: string }) {
   const [index, setIndex] = useState(0);
-  const [visible, setVisible] = useState(true);
-  const fadeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Random starting slogan on each page load, then rotate every 4s.
     setIndex(Math.floor(Math.random() * SLOGANS.length));
-    const interval = setInterval(() => {
-      setVisible(false); // fade out
-      fadeRef.current = setTimeout(() => {
-        setIndex((p) => (p + 1) % SLOGANS.length);
-        setVisible(true); // fade in next
-      }, 400);
-    }, 4000);
-    return () => {
-      clearInterval(interval);
-      if (fadeRef.current) clearTimeout(fadeRef.current);
-    };
   }, []);
 
-  return (
-    <span
-      aria-live="polite"
-      className={`block transition-opacity duration-300 ${
-        visible ? "opacity-100" : "opacity-0"
-      } ${className}`}
-    >
-      {SLOGANS[index]}
-    </span>
-  );
+  return <span className={`block ${className}`}>{SLOGANS[index]}</span>;
 }

@@ -1,19 +1,23 @@
 import type { MetadataRoute } from "next";
-import { LOCALES } from "@/lib/i18n";
+import { getAllPhoneNumbers } from "@/lib/spam";
+import { planShards } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
 
-// One sitemap shard for core pages + English, one per non-English locale.
-const SHARD_COUNT = 1 + LOCALES.filter((l) => l.code !== "en").length;
+export const revalidate = 3600;
 
-export default function robots(): MetadataRoute.Robots {
+export default async function robots(): Promise<MetadataRoute.Robots> {
+  // Derive the shard count the same way the sitemap does, so robots.txt always
+  // lists exactly the shards that exist (/sitemap/<id>.xml).
+  const numbers = await getAllPhoneNumbers();
+  const shardCount = planShards(numbers.length).length;
+
   return {
     rules: {
       userAgent: "*",
       allow: "/",
     },
-    // generateSitemaps emits each shard at /sitemap/<id>.xml — list them all.
     sitemap: Array.from(
-      { length: SHARD_COUNT },
+      { length: shardCount },
       (_, i) => `${SITE_URL}/sitemap/${i}.xml`
     ),
     host: SITE_URL,
