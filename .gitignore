@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local scraper / data-import scripts and scraped data (not part of the app)
+scraper*.py
+check_pages.py
+import_orgs.py
+*.csv

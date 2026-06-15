@@ -6,7 +6,29 @@ import { submitReport, type ReportState } from "@/app/lookup/[number]/actions";
 
 const TYPES = ["Scam", "Telemarketer", "Robocall", "Debt Collector", "Other"];
 
-function SubmitButton() {
+export type ReportFormLabels = {
+  isSpam: string;
+  type: string;
+  comment: string;
+  commentPlaceholder: string;
+  submit: string;
+  submitting: string;
+  success: string;
+  error: string;
+};
+
+const DEFAULT_LABELS: ReportFormLabels = {
+  isSpam: "This number is spam / unwanted",
+  type: "Type of call",
+  comment: "Comment",
+  commentPlaceholder: "What happened on the call?",
+  submit: "Submit report",
+  submitting: "Submitting…",
+  success: "Thanks! Your report has been submitted.",
+  error: "Could not save your report. Please try again.",
+};
+
+function SubmitButton({ submit, submitting }: { submit: string; submitting: string }) {
   const { pending } = useFormStatus();
   return (
     <button
@@ -14,12 +36,19 @@ function SubmitButton() {
       disabled={pending}
       className="rounded-lg bg-canada px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
     >
-      {pending ? "Submitting…" : "Submit report"}
+      {pending ? submitting : submit}
     </button>
   );
 }
 
-export default function ReportForm({ phoneNumber }: { phoneNumber: string }) {
+export default function ReportForm({
+  phoneNumber,
+  labels,
+}: {
+  phoneNumber: string;
+  labels?: ReportFormLabels;
+}) {
+  const t = labels ?? DEFAULT_LABELS;
   const [state, formAction] = useActionState<ReportState, FormData>(
     submitReport,
     { ok: false, message: "" }
@@ -36,44 +65,43 @@ export default function ReportForm({ phoneNumber }: { phoneNumber: string }) {
           defaultChecked
           className="h-5 w-5 accent-canada"
         />
-        <span className="text-sm font-medium text-zinc-700">
-          This number is spam / unwanted
-        </span>
+        <span className="text-sm font-medium text-zinc-700">{t.isSpam}</span>
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium text-zinc-700">Type of call</span>
+        <span className="text-sm font-medium text-zinc-700">{t.type}</span>
+        {/* Option values stay English (the canonical DB categories) */}
         <select
           name="type"
           defaultValue="Scam"
           className="rounded-lg border border-zinc-300 px-3 py-2 outline-none focus:border-canada focus:ring-2 focus:ring-canada/30"
         >
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
+          {TYPES.map((ty) => (
+            <option key={ty} value={ty}>
+              {ty}
             </option>
           ))}
         </select>
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium text-zinc-700">Comment</span>
+        <span className="text-sm font-medium text-zinc-700">{t.comment}</span>
         <textarea
           name="comment"
           rows={3}
           maxLength={1000}
-          placeholder="What happened on the call?"
+          placeholder={t.commentPlaceholder}
           className="rounded-lg border border-zinc-300 px-3 py-2 outline-none focus:border-canada focus:ring-2 focus:ring-canada/30"
         />
       </label>
 
       <div className="flex items-center gap-3">
-        <SubmitButton />
+        <SubmitButton submit={t.submit} submitting={t.submitting} />
         {state.message && (
           <span
             className={`text-sm ${state.ok ? "text-green-600" : "text-canada"}`}
           >
-            {state.message}
+            {state.ok ? t.success : t.error}
           </span>
         )}
       </div>

@@ -28,7 +28,7 @@ export default function LanguagePage({ code }: { code: string }) {
         <SloganRotator className="mb-6 h-6 font-medium text-canada" />
         <p className="mb-8 max-w-xl text-zinc-600">{t.intro}</p>
         <div className="w-full max-w-xl">
-          <SearchBar buttonLabel={t.searchButton} />
+          <SearchBar buttonLabel={t.searchButton} lang={code} />
         </div>
         <div className="mt-6">
           <LanguageSwitcher current={code} />
