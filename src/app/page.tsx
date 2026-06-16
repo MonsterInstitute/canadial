@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import SloganRotator from "@/components/SloganRotator";
+import AdUnit from "@/components/AdUnit";
 import { supabaseAdmin } from "@/lib/supabase";
 import { formatPhone } from "@/lib/lookup";
 import { getAreaCodeCounts } from "@/lib/spam";
@@ -103,6 +104,8 @@ export default async function Home() {
           </div>
         </section>
       )}
+
+      <AdUnit className="pb-8" />
 
       <section id="recent-reports" className="pb-8">
         <h2 className="mb-4 text-xl font-semibold text-zinc-900">

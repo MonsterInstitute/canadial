@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 // AdSense publisher ID — replace with your real ca-pub-XXXXXXXX value.
-const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT || "ca-pub-XXXXXXXXXXXXXXXX";
+const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT || "ca-pub-1219788687006562";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

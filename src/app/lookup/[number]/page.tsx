@@ -3,6 +3,7 @@ import Link from "next/link";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
 import { SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
+import AdUnit from "@/components/AdUnit";
 
 // Cache each number page and regenerate hourly — keeps crawls cheap.
 export const revalidate = 3600;
@@ -344,6 +345,9 @@ export default async function LookupPage({ params }: Props) {
           mostCommonType={result.data.most_common_type}
         />
       )}
+
+      {/* Ad */}
+      <AdUnit className="mt-8" />
 
       {/* Report form */}
       <section className="mt-8">
