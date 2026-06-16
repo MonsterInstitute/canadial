@@ -36,6 +36,8 @@ export async function submitReport(
   });
 
   if (error) {
+    // Surface the real cause in server logs (auth/RLS/schema) instead of hiding it.
+    console.error("submitReport insert failed:", error.code, error.message);
     return { ok: false, message: "Could not save your report. Please try again." };
   }
 
