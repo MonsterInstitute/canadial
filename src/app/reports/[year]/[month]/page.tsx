@@ -5,7 +5,7 @@ import { getMonthlyReport, getReportableMonths, monthName } from "@/lib/reports"
 import { formatPhone } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 
-export const revalidate = 86400; // daily
+export const revalidate = 604800; // weekly
 
 type Props = { params: Promise<{ year: string; month: string }> };
 

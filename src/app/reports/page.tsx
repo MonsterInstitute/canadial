@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { getReportableMonths, monthName } from "@/lib/reports";
 
-export const revalidate = 86400; // daily
+export const revalidate = 604800; // weekly
 
 export const metadata: Metadata = {
   title: "Canadian Spam Call Reports",

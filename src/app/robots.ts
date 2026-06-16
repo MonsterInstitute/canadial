@@ -3,7 +3,7 @@ import { getAllPhoneNumbers } from "@/lib/spam";
 import { planShards } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
 
-export const revalidate = 3600;
+export const revalidate = 86400;
 
 export default async function robots(): Promise<MetadataRoute.Robots> {
   // Derive the shard count the same way the sitemap does, so robots.txt always

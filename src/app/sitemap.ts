@@ -6,7 +6,7 @@ import { CHUNK_SIZE, planShards, lookupPrefix } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
 
 // Revalidate hourly as new numbers get reported.
-export const revalidate = 3600;
+export const revalidate = 86400;
 
 const LANGS = LOCALES.filter((l) => l.code !== "en");
 
