@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
+import { getNumbersForAreaCode, type AreaNumber } from "@/lib/spam";
+import { regionForCode } from "@/lib/area-codes";
+import { provinceForAreaCode } from "@/lib/provinces";
 import { SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
@@ -13,25 +16,44 @@ type Props = { params: Promise<{ number: string }> };
 type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;
 
 // Schema.org structured data: a breadcrumb plus an FAQ-style Q&A that mirrors
-// the page's verdict, for rich results.
+// the page's verdict, for rich results. The extra location questions give Google
+// more indexable content even when a number has few or no reports.
 function buildJsonLd(number: string, pretty: string, result: LookupResult) {
   const code = number.slice(0, 3);
   const url = `${SITE_URL}/lookup/${number}`;
+  const region = regionForCode(code);
+  const province = provinceForAreaCode(code);
 
-  let answer: string;
+  let verdict: string;
   if (result.type === "legitimate") {
     const name = result.data?.name ? ` belonging to ${result.data.name}` : "";
-    answer = `${pretty} is a verified, legitimate phone number${name}.`;
+    verdict = `${pretty} is a verified, legitimate phone number${name}.`;
   } else if (result.type === "spam") {
     const kind = result.data.most_common_type
       ? ` as ${result.data.most_common_type}`
       : "";
-    answer = `${pretty} has been reported ${result.data.report_count} time${
+    verdict = `${pretty} has been reported ${result.data.report_count} time${
       result.data.report_count === 1 ? "" : "s"
-    }${kind} and is likely spam or an unwanted call.`;
+    }${kind} and is likely spam or an unwanted call. Don't call back or share personal information.`;
   } else {
-    answer = `There are no spam reports for ${pretty} yet.`;
+    verdict = `There are no spam or scam reports for ${pretty} yet. Always stay cautious with unexpected calls.`;
   }
+
+  const locationAnswer = region
+    ? `${pretty} uses the ${code} area code, which serves ${region} in ${province}, Canada.`
+    : `${pretty} uses the ${code} area code in ${province}, Canada.`;
+
+  const faq = [
+    { q: `Is ${pretty} spam?`, a: verdict },
+    { q: `Is ${pretty} a scam?`, a: verdict },
+    {
+      q: `What area code is ${pretty}?`,
+      a: `${pretty} belongs to the ${code} area code${
+        region ? `, which covers ${region}` : ""
+      }.`,
+    },
+    { q: `Where is ${pretty} located?`, a: locationAnswer },
+  ];
 
   return {
     "@context": "https://schema.org",
@@ -51,13 +73,11 @@ function buildJsonLd(number: string, pretty: string, result: LookupResult) {
       },
       {
         "@type": "FAQPage",
-        mainEntity: [
-          {
-            "@type": "Question",
-            name: `Is ${pretty} spam?`,
-            acceptedAnswer: { "@type": "Answer", text: answer },
-          },
-        ],
+        mainEntity: faq.map(({ q, a }) => ({
+          "@type": "Question",
+          name: q,
+          acceptedAnswer: { "@type": "Answer", text: a },
+        })),
       },
     ],
   };
@@ -200,6 +220,165 @@ function Reassurance({
   );
 }
 
+// Format an ISO timestamp as a short, human date (e.g. "Jun 12, 2026").
+function formatReportDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-CA", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+// A compact list of other reported numbers in the same area code, with a link
+// through to the full area-code page. Used on both spam and unknown numbers so
+// every lookup page has substantive, internally-linked content.
+function RelatedNumbers({
+  related,
+  code,
+  region,
+  title,
+  intro,
+}: {
+  related: AreaNumber[];
+  code: string;
+  region: string | null;
+  title: string;
+  intro: string;
+}) {
+  return (
+    <section className="mt-8">
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <p className="mt-1 text-sm text-zinc-600">{intro}</p>
+      {related.length > 0 ? (
+        <ul className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200">
+          {related.map((n) => (
+            <li key={n.phone_number}>
+              <Link
+                href={`/lookup/${n.phone_number}`}
+                className="flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-zinc-900">
+                    {formatPhone(n.phone_number)}
+                  </div>
+                  {n.latest_comment && (
+                    <p className="truncate text-sm text-zinc-500">
+                      {n.latest_comment}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-canada">
+                    {n.most_common_type || "Spam"}
+                  </span>
+                  <span className="text-xs text-zinc-400">
+                    {n.report_count} report{n.report_count === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500">
+          No other numbers have been reported in the {code} area code yet.
+        </p>
+      )}
+      <Link
+        href={`/area/${code}`}
+        className="mt-3 inline-block text-sm font-medium text-canada hover:underline"
+      >
+        See all reported numbers in area code {code}
+        {region ? ` (${region})` : ""} →
+      </Link>
+    </section>
+  );
+}
+
+// Area-code facts plus generic spam-spotting tips. Shown for numbers with no
+// reports so the page still carries useful, indexable content.
+function AreaInfoAndTips({
+  pretty,
+  code,
+  region,
+  province,
+}: {
+  pretty: string;
+  code: string;
+  region: string | null;
+  province: string;
+}) {
+  return (
+    <>
+      <section className="mt-6 rounded-xl border border-zinc-200 p-5">
+        <h2 className="text-lg font-semibold">About the {code} area code</h2>
+        <dl className="mt-3 grid grid-cols-1 gap-1 text-sm text-zinc-600 sm:grid-cols-2">
+          <div>
+            <dt className="inline font-medium text-zinc-700">Area code: </dt>
+            <dd className="inline">{code}</dd>
+          </div>
+          {region && (
+            <div>
+              <dt className="inline font-medium text-zinc-700">Region: </dt>
+              <dd className="inline">{region}</dd>
+            </div>
+          )}
+          <div>
+            <dt className="inline font-medium text-zinc-700">Province: </dt>
+            <dd className="inline">{province}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-zinc-700">Country: </dt>
+            <dd className="inline">Canada 🍁</dd>
+          </div>
+        </dl>
+        <p className="mt-3 text-sm leading-relaxed text-zinc-600">
+          {pretty} is a Canadian phone number in the {code} area code
+          {region ? `, which serves ${region}` : ""}. Numbers in this area code
+          are based in {province}. Browse the{" "}
+          <Link
+            href={`/area/${code}`}
+            className="font-medium text-canada hover:underline"
+          >
+            {code} area code page
+          </Link>{" "}
+          to see which numbers nearby have been reported for spam or scams.
+        </p>
+      </section>
+
+      <section className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
+        <h2 className="text-lg font-semibold">How to spot a spam or scam call</h2>
+        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700">
+          <li>
+            Real organizations — including the CRA, banks, and police — never
+            threaten arrest or demand immediate payment in gift cards or
+            e-transfers over the phone.
+          </li>
+          <li>
+            Scammers often spoof a local number, so a familiar area code like{" "}
+            {code} does not guarantee the caller is who they claim to be.
+          </li>
+          <li>
+            If you didn&apos;t recognize the number, let it go to voicemail — a
+            legitimate caller will leave a message.
+          </li>
+          <li>
+            Never press a button to &quot;opt out&quot; of a robocall; it only
+            confirms your line is active and invites more calls.
+          </li>
+          <li>
+            If a call feels suspicious, hang up and call the organization back
+            using a number from their official website.
+          </li>
+        </ul>
+      </section>
+    </>
+  );
+}
+
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
   const pretty = formatPhone(number);
@@ -223,7 +402,23 @@ export default async function LookupPage({ params }: Props) {
     );
   }
 
-  const jsonLd = buildJsonLd(normalizePhone(number), pretty, result);
+  const normalized = normalizePhone(number);
+  const jsonLd = buildJsonLd(normalized, pretty, result);
+
+  // Area-code context, shown on every (valid) number so even thin pages carry
+  // real information. Related numbers power internal links to the area page.
+  const code = normalized.slice(0, 3);
+  const region = regionForCode(code);
+  const province = provinceForAreaCode(code);
+
+  // Other reported numbers in the same area code (excluding this one). Only
+  // needed for the states that render a related-numbers section.
+  const related: AreaNumber[] =
+    result.type === "spam" || result.type === "unknown"
+      ? (await getNumbersForAreaCode(code))
+          .filter((n) => n.phone_number !== normalized)
+          .slice(0, 5)
+      : [];
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -291,6 +486,14 @@ export default async function LookupPage({ params }: Props) {
               </span>
             </div>
 
+            <p className="mt-3 flex flex-wrap items-center gap-x-2 text-sm text-zinc-700">
+              <span className="font-semibold">📍 {region ?? `Area code ${code}`}</span>
+              <span className="text-zinc-400">·</span>
+              <Link href={`/area/${code}`} className="text-canada hover:underline">
+                Area code {code}, {province}
+              </Link>
+            </p>
+
             {result.data.reports?.length > 0 && (
               <div className="mt-4">
                 <h3 className="text-sm font-semibold text-zinc-700">
@@ -305,21 +508,32 @@ export default async function LookupPage({ params }: Props) {
                           id?: string | number;
                           type?: string | null;
                           comment?: string | null;
+                          created_at?: string | null;
                         },
                         i: number
-                      ) => (
-                        <li
-                          key={r.id ?? i}
-                          className="rounded-lg bg-zinc-50 p-3 text-sm"
-                        >
-                          {r.type && (
-                            <span className="mr-2 rounded bg-red-50 px-1.5 py-0.5 text-xs font-medium text-canada">
-                              {r.type}
-                            </span>
-                          )}
-                          <span className="text-zinc-700">{r.comment}</span>
-                        </li>
-                      )
+                      ) => {
+                        const reported = formatReportDate(r.created_at);
+                        return (
+                          <li
+                            key={r.id ?? i}
+                            className="rounded-lg bg-zinc-50 p-3 text-sm"
+                          >
+                            <div className="mb-1 flex flex-wrap items-center gap-2">
+                              {r.type && (
+                                <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs font-medium text-canada">
+                                  {r.type}
+                                </span>
+                              )}
+                              {reported && (
+                                <span className="text-xs text-zinc-400">
+                                  Reported {reported}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-zinc-700">{r.comment}</span>
+                          </li>
+                        );
+                      }
                     )}
                 </ul>
               </div>
@@ -344,6 +558,41 @@ export default async function LookupPage({ params }: Props) {
           reports={result.data.reports ?? []}
           mostCommonType={result.data.most_common_type}
         />
+      )}
+
+      {/* Similar reported numbers nearby — internal links for spam pages */}
+      {result.type === "spam" && (
+        <RelatedNumbers
+          related={related}
+          code={code}
+          region={region}
+          title="Similar reported numbers in this area code"
+          intro={`Other numbers in the ${code} area code${
+            region ? ` (${region})` : ""
+          } that Canadians have reported.`}
+        />
+      )}
+
+      {/* Rich content for numbers with no reports yet, so the page still has
+          something worth indexing. */}
+      {result.type === "unknown" && (
+        <>
+          <AreaInfoAndTips
+            pretty={pretty}
+            code={code}
+            region={region}
+            province={province}
+          />
+          <RelatedNumbers
+            related={related}
+            code={code}
+            region={region}
+            title="Numbers reported near this area code"
+            intro={`Recently reported numbers in the ${code} area code${
+              region ? ` (${region})` : ""
+            }.`}
+          />
+        </>
       )}
 
       {/* Ad */}
