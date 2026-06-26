@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     template: `%s | ${SITE_NAME}`,
   },
   description:
-    "Look up any Canadian phone number and find out who called. Check if a number is spam, a scam, or a legitimate business. Free reverse phone lookup trusted by Canadians.",
+    "Look up any Canadian phone number. Check if it is spam, a scam, or legitimate. Free reverse phone lookup in 11 languages including French and Chinese.",
   applicationName: SITE_NAME,
   icons: {
     icon: [
