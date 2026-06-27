@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { getNumbersForAreaCode } from "@/lib/spam";
 import { AREA_CODES, regionForCode } from "@/lib/area-codes";
+import { provinceForAreaCode } from "@/lib/provinces";
 import { formatPhone } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 import SearchBar from "@/components/SearchBar";
@@ -10,6 +12,20 @@ import SearchBar from "@/components/SearchBar";
 // ISR: regenerate hourly. Pre-render the well-known area codes at build time;
 // any other 3-digit code still renders on demand.
 export const revalidate = 3600;
+
+// Shared between generateMetadata and the page render so we only aggregate the
+// area code's numbers once per request.
+const getNumbers = cache(getNumbersForAreaCode);
+
+// The single most common caller type across an area code's numbers.
+function topTypeFor(numbers: { most_common_type: string | null }[]): string | null {
+  const buckets: Record<string, number> = {};
+  for (const n of numbers) {
+    const t = n.most_common_type || "Other";
+    buckets[t] = (buckets[t] ?? 0) + 1;
+  }
+  return Object.entries(buckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
 
 export function generateStaticParams() {
   return AREA_CODES.map((a) => ({ code: a.code }));
@@ -25,11 +41,30 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { code } = await params;
   if (!isValidCode(code)) return {};
   const region = regionForCode(code);
+  const province = provinceForAreaCode(code);
+  const loc = region ? `${region}, ${province}` : province;
+
+  const numbers = await getNumbers(code);
+  const count = numbers.length;
+  const topType = topTypeFor(numbers);
+
+  // `absolute` skips the root "%s | Canadial" template.
+  const title = {
+    absolute: `${code} Area Code Spam Calls — ${loc} | ${SITE_NAME}`,
+  };
+
+  const description =
+    count > 0
+      ? `Area code ${code} (${loc}): ${count} spam number${
+          count === 1 ? "" : "s"
+        } reported by Canadians.${
+          topType ? ` Most common: ${topType}.` : ""
+        } See all reported numbers.`
+      : `Area code ${code} (${loc}): no spam numbers reported yet. Search any ${code} number to check if it is spam, a scam, or legitimate.`;
+
   return {
-    title: `${code} spam calls — who is calling from ${code}?`,
-    description: `Reported spam, scam, and robocall numbers in the ${code} area code${
-      region ? ` (${region})` : ""
-    }. See who's calling and read community reports on ${SITE_NAME}.`,
+    title,
+    description,
     alternates: { canonical: `/area/${code}` },
   };
 }
@@ -38,7 +73,7 @@ export default async function AreaPage({ params }: Props) {
   const { code } = await params;
   if (!isValidCode(code)) notFound();
 
-  const numbers = await getNumbersForAreaCode(code);
+  const numbers = await getNumbers(code);
   const region = regionForCode(code);
   const otherCodes = AREA_CODES.filter((a) => a.code !== code).slice(0, 12);
 

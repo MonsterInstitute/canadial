@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     template: `%s | ${SITE_NAME}`,
   },
   description:
-    "Look up any Canadian phone number. Check if it is spam, a scam, or legitimate. Free reverse phone lookup in 11 languages including French and Chinese.",
+    "Look up any Canadian phone number fast. Check if it is spam, a scam, or legitimate. Free reverse phone lookup in 11 languages including French and Chinese.",
   applicationName: SITE_NAME,
   icons: {
     icon: [
@@ -36,10 +36,28 @@ export const metadata: Metadata = {
     apple: "/apple-touch-icon.png",
   },
   openGraph: {
-    siteName: SITE_NAME,
     type: "website",
+    siteName: SITE_NAME,
     locale: "en_CA",
     url: SITE_URL,
+    title: `${SITE_NAME} — ${SITE_TAGLINE}`,
+    description:
+      "Free Canadian reverse phone number lookup. Find out who called and check if a number is spam, a scam, or legitimate.",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: `${SITE_NAME} — ${SITE_TAGLINE}`,
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${SITE_NAME} — ${SITE_TAGLINE}`,
+    description:
+      "Free Canadian reverse phone number lookup. Find out who called and check if a number is spam, a scam, or legitimate.",
+    images: ["/og-image.png"],
   },
   verification: {
     other: {

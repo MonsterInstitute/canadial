@@ -15,6 +15,8 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
     rules: {
       userAgent: "*",
       allow: "/",
+      // The JSON API (e.g. /api/v1/lookup) returns data, not indexable pages.
+      disallow: "/api/",
     },
     sitemap: Array.from(
       { length: shardCount },

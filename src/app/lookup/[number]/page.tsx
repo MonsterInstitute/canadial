@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
 import { getNumbersForAreaCode, type AreaNumber } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
@@ -10,6 +11,10 @@ import AdUnit from "@/components/AdUnit";
 
 // Cache each number page and regenerate hourly — keeps crawls cheap.
 export const revalidate = 3600;
+
+// generateMetadata and the page render both need the lookup; cache() dedupes
+// them into a single DB call per request.
+const getLookup = cache(lookupPhone);
 
 type Props = { params: Promise<{ number: string }> };
 
@@ -86,10 +91,45 @@ function buildJsonLd(number: string, pretty: string, result: LookupResult) {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { number } = await params;
   const pretty = formatPhone(number);
+  const normalized = normalizePhone(number);
+
+  // `absolute` bypasses the root "%s | Canadial" template so the title reads
+  // exactly as written.
+  const title = { absolute: `Is ${pretty} Spam? | Canadian Phone Lookup` };
+
+  if (normalized.length !== 10) {
+    return {
+      title,
+      description: `${pretty} is not a valid 10-digit Canadian phone number.`,
+    };
+  }
+
+  // Build a description from the number's real data so every page is unique.
+  const result = await getLookup(number);
+  const code = normalized.slice(0, 3);
+  const region = regionForCode(code);
+  const areaPhrase = region ?? `${code} area code`;
+
+  let description: string;
+  if (result.type === "legitimate") {
+    const org = result.data?.name ? ` belonging to ${result.data.name}` : "";
+    description = `${pretty} is a verified legitimate number${org}. Check contact details, category, and links on Canadial.`;
+  } else if (result.type === "spam") {
+    const type = result.data.most_common_type ?? "spam";
+    const n = result.data.report_count;
+    description = `${pretty} has been reported ${n} time${
+      n === 1 ? "" : "s"
+    } as ${type} by Canadians. See the reports and protect yourself from this ${areaPhrase} number.`;
+  } else {
+    description = `Look up ${pretty} — a Canadian number in ${
+      region ? `the ${region} area` : `the ${code} area code`
+    }. Check community reports and see if this number is spam or legitimate.`;
+  }
+
   return {
-    title: `Is ${pretty} spam?`,
-    description: `Find out who called from ${pretty}. See spam reports, caller type, and community comments on Canadial.`,
-    alternates: { canonical: `/lookup/${normalizePhone(number)}` },
+    title,
+    description,
+    alternates: { canonical: `/lookup/${normalized}` },
   };
 }
 
@@ -382,7 +422,7 @@ function AreaInfoAndTips({
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
   const pretty = formatPhone(number);
-  const result = await lookupPhone(number);
+  const result = await getLookup(number);
 
   if (result.type === "invalid") {
     return (
