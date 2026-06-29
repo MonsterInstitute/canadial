@@ -27,6 +27,30 @@ export function provinceForAreaCode(code: string): string {
   return "Other / Unknown";
 }
 
+// Whether the area code is a recognised Canadian geographic code.
+export function isCanadianAreaCode(code: string): boolean {
+  return Boolean(PROVINCE_BY_CODE[code]);
+}
+
+export function isTollFree(code: string): boolean {
+  return TOLL_FREE.has(code);
+}
+
+// A coarse line-type label. Canadian numbering plans overlay mobile and
+// landline numbers on the same area codes, so only toll-free codes can be
+// distinguished by prefix alone.
+export function numberTypeForCode(code: string): string {
+  if (TOLL_FREE.has(code)) return "Toll-free";
+  return "Mobile or landline";
+}
+
+// A human label for the calling country, used in "About this number" copy.
+export function countryForAreaCode(code: string): string {
+  if (PROVINCE_BY_CODE[code]) return "Canada 🍁";
+  if (TOLL_FREE.has(code)) return "Canada & US (toll-free)";
+  return "United States or international";
+}
+
 export const ALL_PROVINCES = [
   "Ontario",
   "Quebec",

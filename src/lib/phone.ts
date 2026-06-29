@@ -16,3 +16,12 @@ export function formatPhone(input: string): string {
   if (n.length !== 10) return input
   return `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}`
 }
+
+// Some legacy comments were imported with a "Reported on 800notes.com" footer.
+// We surface them as community reports, so strip any reference to the original
+// source when rendering. Display-only — the stored comment is never changed.
+export function cleanComment(input: string): string {
+  return input
+    .replace(/reported on 800notes\.com/gi, "Reported by Canadian community members")
+    .replace(/\b800notes\.com\b/gi, "the Canadian community")
+}

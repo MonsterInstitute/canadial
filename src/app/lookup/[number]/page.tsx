@@ -2,9 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
+import { cleanComment } from "@/lib/phone";
 import { getNumbersForAreaCode, type AreaNumber } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
-import { provinceForAreaCode } from "@/lib/provinces";
+import {
+  provinceForAreaCode,
+  numberTypeForCode,
+  countryForAreaCode,
+  isCanadianAreaCode,
+} from "@/lib/provinces";
 import { SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
@@ -20,45 +26,73 @@ type Props = { params: Promise<{ number: string }> };
 
 type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;
 
-// Schema.org structured data: a breadcrumb plus an FAQ-style Q&A that mirrors
-// the page's verdict, for rich results. The extra location questions give Google
-// more indexable content even when a number has few or no reports.
+// The four FAQ questions every lookup page answers, using the number's real
+// data. Shared between the visible FAQ section and the Schema.org FAQPage so the
+// rich result and the page stay in sync.
+function buildFaq(
+  pretty: string,
+  code: string,
+  region: string | null,
+  province: string,
+  result: LookupResult
+): { q: string; a: string }[] {
+  const where = region
+    ? `the ${code} area code, which serves ${region} in ${province}, Canada`
+    : `the ${code} area code in ${province}`;
+
+  let safe: string;
+  let who: string;
+  let callback: string;
+
+  if (result.type === "legitimate") {
+    const name = result.data?.name ? ` belonging to ${result.data.name}` : "";
+    safe = `Yes. ${pretty} is a verified, legitimate phone number${name}, so it is safe to answer.`;
+    who = result.data?.name
+      ? `${pretty} belongs to ${result.data.name}${
+          result.data.category ? `, a ${result.data.category}` : ""
+        }.`
+      : `${pretty} is a verified, legitimate number.`;
+    callback = `Yes, ${pretty} is a verified number, so it is safe to call back.`;
+  } else if (result.type === "spam") {
+    const n = result.data.report_count;
+    const times = `${n} time${n === 1 ? "" : "s"}`;
+    const kind = result.data.most_common_type
+      ? ` as ${result.data.most_common_type}`
+      : "";
+    safe = `Be cautious. ${pretty} has been reported ${times}${kind} by Canadians, so it is likely an unwanted or spam call. If you don't recognise it, let it go to voicemail.`;
+    who = `${pretty} has been reported ${times}${kind}. ${
+      result.data.most_common_type
+        ? `Most callers describe it as ${result.data.most_common_type}.`
+        : "Canadians have flagged it as an unwanted caller."
+    }`;
+    callback = `No. Don't call ${pretty} back — returning a spam or scam call can confirm your number is active and lead to more calls.`;
+  } else {
+    safe = `There are no reports for ${pretty} yet, so we can't confirm it is safe. If you don't recognise the number, let it go to voicemail — a legitimate caller will leave a message.`;
+    who = `Nobody has reported ${pretty} yet, so the caller is unknown. Be the first to add a report if you've had a call.`;
+    callback = `If you don't recognise ${pretty}, it is safer not to call back. Wait for a voicemail or search the number first.`;
+  }
+
+  return [
+    { q: `Is ${pretty} safe to answer?`, a: safe },
+    { q: `Who is calling from ${pretty}?`, a: who },
+    {
+      q: `What area is ${pretty} from?`,
+      a: `${pretty} uses ${where}.`,
+    },
+    { q: `Should I call ${pretty} back?`, a: callback },
+  ];
+}
+
+// Schema.org structured data: a breadcrumb plus the page's FAQ, for rich
+// results. The FAQ gives Google indexable content even when a number has few or
+// no reports.
 function buildJsonLd(number: string, pretty: string, result: LookupResult) {
   const code = number.slice(0, 3);
   const url = `${SITE_URL}/lookup/${number}`;
   const region = regionForCode(code);
   const province = provinceForAreaCode(code);
 
-  let verdict: string;
-  if (result.type === "legitimate") {
-    const name = result.data?.name ? ` belonging to ${result.data.name}` : "";
-    verdict = `${pretty} is a verified, legitimate phone number${name}.`;
-  } else if (result.type === "spam") {
-    const kind = result.data.most_common_type
-      ? ` as ${result.data.most_common_type}`
-      : "";
-    verdict = `${pretty} has been reported ${result.data.report_count} time${
-      result.data.report_count === 1 ? "" : "s"
-    }${kind} and is likely spam or an unwanted call. Don't call back or share personal information.`;
-  } else {
-    verdict = `There are no spam or scam reports for ${pretty} yet. Always stay cautious with unexpected calls.`;
-  }
-
-  const locationAnswer = region
-    ? `${pretty} uses the ${code} area code, which serves ${region} in ${province}, Canada.`
-    : `${pretty} uses the ${code} area code in ${province}, Canada.`;
-
-  const faq = [
-    { q: `Is ${pretty} spam?`, a: verdict },
-    { q: `Is ${pretty} a scam?`, a: verdict },
-    {
-      q: `What area code is ${pretty}?`,
-      a: `${pretty} belongs to the ${code} area code${
-        region ? `, which covers ${region}` : ""
-      }.`,
-    },
-    { q: `Where is ${pretty} located?`, a: locationAnswer },
-  ];
+  const faq = buildFaq(pretty, code, region, province, result);
 
   return {
     "@context": "https://schema.org",
@@ -306,7 +340,7 @@ function RelatedNumbers({
                   </div>
                   {n.latest_comment && (
                     <p className="truncate text-sm text-zinc-500">
-                      {n.latest_comment}
+                      {cleanComment(n.latest_comment)}
                     </p>
                   )}
                 </div>
@@ -419,6 +453,194 @@ function AreaInfoAndTips({
   );
 }
 
+// "About this number" — area-code facts that are true for every valid number,
+// so even thin pages carry concrete, unique-per-number information.
+function AboutThisNumber({
+  pretty,
+  code,
+  region,
+  province,
+}: {
+  pretty: string;
+  code: string;
+  region: string | null;
+  province: string;
+}) {
+  const rows: [string, string][] = [
+    ["Phone number", pretty],
+    ["Area code", region ? `${code} — serves ${region}` : code],
+    ["Province", province],
+    ["Country", countryForAreaCode(code)],
+    ["Number type", numberTypeForCode(code)],
+    [
+      "Origin",
+      isCanadianAreaCode(code)
+        ? "Canadian number"
+        : "Not a recognised Canadian area code",
+    ],
+  ];
+  return (
+    <section className="mt-8 rounded-xl border border-zinc-200 p-5">
+      <h2 className="text-lg font-semibold">About this number</h2>
+      <dl className="mt-3 grid grid-cols-1 gap-1 text-sm text-zinc-600 sm:grid-cols-2">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt className="inline font-medium text-zinc-700">{label}: </dt>
+            <dd className="inline">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-sm leading-relaxed text-zinc-600">
+        {pretty} uses the {code} area code
+        {region ? `, which serves ${region}` : ""}. Numbers in this area code are
+        based in {province}
+        {isCanadianAreaCode(code) ? ", Canada" : ""}.
+      </p>
+    </section>
+  );
+}
+
+// "Scam trends in [region]" — aggregate stats for the whole area code, giving
+// each page community context beyond the single number.
+function ScamTrends({
+  code,
+  region,
+  reportedNumberCount,
+  topType,
+}: {
+  code: string;
+  region: string | null;
+  reportedNumberCount: number;
+  topType: string | null;
+}) {
+  const place = region ?? `the ${code} area code`;
+  return (
+    <section className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
+      <h2 className="text-lg font-semibold">Scam trends in {place}</h2>
+      {reportedNumberCount > 0 ? (
+        <p className="mt-2 text-sm leading-relaxed text-zinc-600">
+          The {code} area code has{" "}
+          <strong>{reportedNumberCount}</strong> reported spam number
+          {reportedNumberCount === 1 ? "" : "s"}.
+          {topType ? (
+            <>
+              {" "}
+              Most are <strong>{topType}</strong> calls.
+            </>
+          ) : null}{" "}
+          <Link
+            href={`/area/${code}`}
+            className="font-medium text-canada hover:underline"
+          >
+            See all reported {code} numbers →
+          </Link>
+        </p>
+      ) : (
+        <p className="mt-2 text-sm leading-relaxed text-zinc-600">
+          No spam numbers have been reported in the {code} area code yet. Help
+          Canadians by reporting any suspicious calls you receive from {place}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+// "What to do if you receive this call" — concrete next steps keyed to the kind
+// of call. `type` is the most common reported type, or null for unknown numbers.
+function WhatToDo({ type }: { type: string | null }) {
+  let body: React.ReactNode;
+  switch (type) {
+    case "Scam":
+      body = (
+        <>
+          Do not call back and do not provide personal information. Report it to
+          the Canadian Anti-Fraud Centre at{" "}
+          <a className="font-semibold underline" href="tel:+18884958501">
+            1-888-495-8501
+          </a>
+          .
+        </>
+      );
+      break;
+    case "Debt Collector":
+      body = (
+        <>
+          You have rights under Canadian law. Debt collectors cannot call before
+          7am or after 9pm. Contact the FCAC at{" "}
+          <a className="font-semibold underline" href="tel:+18664613222">
+            1-866-461-3222
+          </a>{" "}
+          if you feel harassed.
+        </>
+      );
+      break;
+    case "Telemarketer":
+      body = (
+        <>
+          Register for Canada&apos;s Do Not Call List at{" "}
+          <a
+            className="font-semibold underline"
+            href="https://lnnte-dncl.gc.ca/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            lnnte-dncl.gc.ca
+          </a>{" "}
+          to stop unwanted calls.
+        </>
+      );
+      break;
+    case "Robocall":
+      body = (
+        <>
+          Do not press any numbers. Hang up immediately. Report it to the CRTC at{" "}
+          <a
+            className="font-semibold underline"
+            href="https://crtc.gc.ca/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            crtc.gc.ca
+          </a>
+          .
+        </>
+      );
+      break;
+    default:
+      body = (
+        <>
+          If you&apos;re unsure, let it go to voicemail. Legitimate callers will
+          leave a message.
+        </>
+      );
+  }
+  return (
+    <section className="mt-8 rounded-xl border border-zinc-200 p-5">
+      <h2 className="text-lg font-semibold">
+        What to do if you receive this call
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-zinc-700">{body}</p>
+    </section>
+  );
+}
+
+// Visible FAQ mirroring the Schema.org FAQPage, built from the same real data.
+function FaqSection({ faq }: { faq: { q: string; a: string }[] }) {
+  return (
+    <section className="mt-8">
+      <h2 className="text-lg font-semibold">Frequently asked questions</h2>
+      <dl className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200">
+        {faq.map(({ q, a }) => (
+          <div key={q} className="p-4">
+            <dt className="font-medium text-zinc-900">{q}</dt>
+            <dd className="mt-1 text-sm leading-relaxed text-zinc-600">{a}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
   const pretty = formatPhone(number);
@@ -450,15 +672,27 @@ export default async function LookupPage({ params }: Props) {
   const code = normalized.slice(0, 3);
   const region = regionForCode(code);
   const province = provinceForAreaCode(code);
+  const faq = buildFaq(pretty, code, region, province, result);
 
-  // Other reported numbers in the same area code (excluding this one). Only
-  // needed for the states that render a related-numbers section.
-  const related: AreaNumber[] =
-    result.type === "spam" || result.type === "unknown"
-      ? (await getNumbersForAreaCode(code))
-          .filter((n) => n.phone_number !== normalized)
-          .slice(0, 5)
-      : [];
+  // All reported numbers in this area code, used for both the neighbourhood
+  // list and the area-wide scam-trend stats.
+  const areaNumbers = await getNumbersForAreaCode(code);
+  const related: AreaNumber[] = areaNumbers
+    .filter((n) => n.phone_number !== normalized)
+    .slice(0, 5);
+
+  // Most commonly reported caller type across the whole area code.
+  const areaTypeBuckets: Record<string, number> = {};
+  for (const n of areaNumbers) {
+    const t = n.most_common_type || "Other";
+    areaTypeBuckets[t] = (areaTypeBuckets[t] ?? 0) + 1;
+  }
+  const areaTopType =
+    Object.entries(areaTypeBuckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+  // The most common type for *this* number drives the "what to do" advice;
+  // fall back to null (generic advice) for legitimate/unknown numbers.
+  const thisType = result.type === "spam" ? result.data.most_common_type : null;
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -570,7 +804,9 @@ export default async function LookupPage({ params }: Props) {
                                 </span>
                               )}
                             </div>
-                            <span className="text-zinc-700">{r.comment}</span>
+                            <span className="text-zinc-700">
+                              {cleanComment(r.comment ?? "")}
+                            </span>
                           </li>
                         );
                       }
@@ -600,40 +836,49 @@ export default async function LookupPage({ params }: Props) {
         />
       )}
 
-      {/* Similar reported numbers nearby — internal links for spam pages */}
-      {result.type === "spam" && (
-        <RelatedNumbers
-          related={related}
+      {/* Concrete facts about this number — shown on every valid page */}
+      <AboutThisNumber
+        pretty={pretty}
+        code={code}
+        region={region}
+        province={province}
+      />
+
+      {/* Area-wide scam trends, derived from the whole area code */}
+      <ScamTrends
+        code={code}
+        region={region}
+        reportedNumberCount={areaNumbers.length}
+        topType={areaTopType}
+      />
+
+      {/* Next steps keyed to the call type. Skipped for verified numbers, where
+          the advice wouldn't apply. */}
+      {result.type !== "legitimate" && <WhatToDo type={thisType} />}
+
+      {/* Generic area facts + spotting tips for numbers with no reports yet. */}
+      {result.type === "unknown" && (
+        <AreaInfoAndTips
+          pretty={pretty}
           code={code}
           region={region}
-          title="Similar reported numbers in this area code"
-          intro={`Other numbers in the ${code} area code${
-            region ? ` (${region})` : ""
-          } that Canadians have reported.`}
+          province={province}
         />
       )}
 
-      {/* Rich content for numbers with no reports yet, so the page still has
-          something worth indexing. */}
-      {result.type === "unknown" && (
-        <>
-          <AreaInfoAndTips
-            pretty={pretty}
-            code={code}
-            region={region}
-            province={province}
-          />
-          <RelatedNumbers
-            related={related}
-            code={code}
-            region={region}
-            title="Numbers reported near this area code"
-            intro={`Recently reported numbers in the ${code} area code${
-              region ? ` (${region})` : ""
-            }.`}
-          />
-        </>
-      )}
+      {/* Neighbourhood numbers — internal links to nearby reported numbers */}
+      <RelatedNumbers
+        related={related}
+        code={code}
+        region={region}
+        title="Neighbourhood numbers"
+        intro={`Other reported numbers in the ${code} area code${
+          region ? ` (${region})` : ""
+        }, with their reported type and report count.`}
+      />
+
+      {/* FAQ built from this number's real data */}
+      <FaqSection faq={faq} />
 
       {/* Ad */}
       <AdUnit className="mt-8" />

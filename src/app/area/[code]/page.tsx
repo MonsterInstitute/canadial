@@ -3,9 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 import { getNumbersForAreaCode } from "@/lib/spam";
-import { AREA_CODES, regionForCode } from "@/lib/area-codes";
+import { AREA_CODES, regionForCode, codesForRegion } from "@/lib/area-codes";
 import { provinceForAreaCode } from "@/lib/provinces";
-import { formatPhone } from "@/lib/phone";
+import { formatPhone, cleanComment } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 import SearchBar from "@/components/SearchBar";
 
@@ -75,6 +75,8 @@ export default async function AreaPage({ params }: Props) {
 
   const numbers = await getNumbers(code);
   const region = regionForCode(code);
+  const province = provinceForAreaCode(code);
+  const siblingCodeCount = region ? codesForRegion(region).length : 0;
   const otherCodes = AREA_CODES.filter((a) => a.code !== code).slice(0, 12);
 
   // Community stats, derived from the per-number aggregates we already have.
@@ -152,6 +154,42 @@ export default async function AreaPage({ params }: Props) {
         </p>
       </header>
 
+      <section className="mt-5 text-sm leading-relaxed text-zinc-600">
+        <p>
+          {region ? (
+            <>
+              Area code {code} serves {region} in {province}, Canada.
+              {siblingCodeCount > 1 ? (
+                <>
+                  {" "}
+                  It is one of {siblingCodeCount} area codes serving this region.
+                </>
+              ) : null}{" "}
+            </>
+          ) : (
+            <>Area code {code} is associated with {province}. </>
+          )}
+          {numbers.length > 0 ? (
+            <>
+              Canadial has tracked {numbers.length} reported spam number
+              {numbers.length === 1 ? "" : "s"} in this area code
+              {topType ? (
+                <>
+                  , with <strong>{topType}</strong> being the most commonly
+                  reported type
+                </>
+              ) : null}
+              .
+            </>
+          ) : (
+            <>
+              Canadial has not tracked any reported spam numbers in this area
+              code yet — search any {code} number above to check it.
+            </>
+          )}
+        </p>
+      </section>
+
       {numbers.length > 0 && (
         <section className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
           <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-zinc-600">
@@ -204,7 +242,7 @@ export default async function AreaPage({ params }: Props) {
                   </div>
                   {n.latest_comment && (
                     <p className="truncate text-sm text-zinc-500">
-                      {n.latest_comment}
+                      {cleanComment(n.latest_comment)}
                     </p>
                   )}
                 </div>

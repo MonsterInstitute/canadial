@@ -43,3 +43,9 @@ const REGION_BY_CODE: Record<string, string> = Object.fromEntries(
 export function regionForCode(code: string): string | null {
   return REGION_BY_CODE[code] ?? null;
 }
+
+// All area codes that share a region label (e.g. 416/647/437 all serve
+// "Toronto, ON"). Used to describe how many codes cover the same area.
+export function codesForRegion(region: string): string[] {
+  return AREA_CODES.filter((a) => a.region === region).map((a) => a.code);
+}
