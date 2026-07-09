@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
-import { cleanComment } from "@/lib/phone";
+import { cleanComment, isFtcSource, describeFtcReport } from "@/lib/phone";
 import { getNumbersForAreaCode, type AreaNumber } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
 import {
@@ -783,10 +783,17 @@ export default async function LookupPage({ params }: Props) {
                           type?: string | null;
                           comment?: string | null;
                           created_at?: string | null;
+                          source?: string | null;
                         },
                         i: number
                       ) => {
                         const reported = formatReportDate(r.created_at);
+                        const ftc = isFtcSource(r.source);
+                        // FTC records get structured display: a neutral badge,
+                        // a "Reported to FTC" line, and the complaint subject.
+                        const ftcParts = ftc
+                          ? describeFtcReport(r.comment)
+                          : null;
                         return (
                           <li
                             key={r.id ?? i}
@@ -798,15 +805,42 @@ export default async function LookupPage({ params }: Props) {
                                   {r.type}
                                 </span>
                               )}
+                              {ftc && (
+                                <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600">
+                                  FTC Verified Complaint
+                                </span>
+                              )}
                               {reported && (
                                 <span className="text-xs text-zinc-400">
                                   Reported {reported}
                                 </span>
                               )}
                             </div>
-                            <span className="text-zinc-700">
-                              {cleanComment(r.comment ?? "")}
-                            </span>
+                            {ftcParts ? (
+                              <div className="space-y-0.5">
+                                {ftcParts.subject && (
+                                  <p className="text-zinc-700">
+                                    <span className="font-medium text-zinc-600">
+                                      📋 Complaint subject:
+                                    </span>{" "}
+                                    {ftcParts.subject}
+                                  </p>
+                                )}
+                                <p
+                                  className={
+                                    ftcParts.subject
+                                      ? "text-xs text-zinc-500"
+                                      : "text-zinc-700"
+                                  }
+                                >
+                                  {ftcParts.body}
+                                </p>
+                              </div>
+                            ) : (
+                              <span className="text-zinc-700">
+                                {cleanComment(r.comment ?? "")}
+                              </span>
+                            )}
                           </li>
                         );
                       }
