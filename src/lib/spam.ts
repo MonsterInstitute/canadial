@@ -184,32 +184,102 @@ function deriveSiteStats(
   };
 }
 
+// A real NANP area code never starts with 0 or 1. Used to drop junk keys
+// (e.g. "000", "010") that appear when a stats function doesn't filter to valid
+// 10-digit numbers.
+function isPlausibleAreaCode(code: string): boolean {
+  return /^[2-9]\d\d$/.test(code);
+}
+
+function toNumberMap(
+  value: unknown,
+  keyFilter?: (key: string) => boolean
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === "number" && v > 0 && (!keyFilter || keyFilter(k))) {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+}
+
+// Normalize whatever get_site_stats() returns into the raw aggregates
+// deriveSiteStats() needs. Accepts both the canonical shape from our migration
+// (total_numbers / type_counts / area_codes) and a flatter shape
+// (total / scam,telemarketer,robocall,debt / area_counts), so the homepage keeps
+// working regardless of which version of the function is installed. Returns null
+// when the payload carries no usable data (caller then falls back to a scan).
+function normalizeStatsPayload(
+  raw: unknown
+): { totalNumbers: number; totalReports: number; typeCounts: Record<string, number>; areaCodeCounts: Record<string, number> } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as Record<string, unknown>;
+
+  const num = (v: unknown) => (typeof v === "number" ? v : 0);
+
+  // Canonical shape.
+  if ("area_codes" in d || "total_numbers" in d || "type_counts" in d) {
+    const areaCodeCounts = toNumberMap(d.area_codes, isPlausibleAreaCode);
+    const typeCounts = toNumberMap(d.type_counts);
+    const totalNumbers = num(d.total_numbers);
+    const totalReports = num(d.total_reports) || totalNumbers;
+    if (totalNumbers > 0 || Object.keys(areaCodeCounts).length > 0) {
+      return { totalNumbers, totalReports, typeCounts, areaCodeCounts };
+    }
+    return null;
+  }
+
+  // Flat shape: { total, scam, telemarketer, robocall, debt, area_counts }.
+  if ("area_counts" in d || "total" in d) {
+    const areaCodeCounts = toNumberMap(d.area_counts, isPlausibleAreaCode);
+    const typeCounts: Record<string, number> = {};
+    for (const [key, label] of [
+      ["scam", "Scam"],
+      ["telemarketer", "Telemarketer"],
+      ["robocall", "Robocall"],
+      ["debt", "Debt Collector"],
+    ] as const) {
+      const n = num(d[key]);
+      if (n > 0) typeCounts[label] = n;
+    }
+    const totalNumbers = num(d.total);
+    if (totalNumbers > 0 || Object.keys(areaCodeCounts).length > 0) {
+      return { totalNumbers, totalReports: totalNumbers, typeCounts, areaCodeCounts };
+    }
+    return null;
+  }
+
+  return null;
+}
+
 // Fast path: a single Postgres aggregation (see the get_site_stats() migration)
 // instead of paging the whole table into the app. Falls back to a full row scan
-// if the function hasn't been applied to the database yet, so the homepage keeps
+// if the function is missing or returns nothing usable, so the homepage keeps
 // working either way.
 export async function getSiteStats(): Promise<SiteStats> {
   const { data, error } = await supabaseAdmin.rpc("get_site_stats");
-  if (error || !data) {
-    if (error) {
-      console.error(
-        "get_site_stats RPC failed, falling back to scan:",
-        error.message
-      );
-    }
+  if (error) {
+    console.error(
+      "get_site_stats RPC failed, falling back to scan:",
+      error.message
+    );
     return getSiteStatsByScan();
   }
-  const d = data as {
-    total_numbers?: number;
-    total_reports?: number;
-    type_counts?: Record<string, number>;
-    area_codes?: Record<string, number>;
-  };
+  const norm = normalizeStatsPayload(data);
+  if (!norm) {
+    console.error(
+      "get_site_stats returned an unrecognized payload, falling back to scan"
+    );
+    return getSiteStatsByScan();
+  }
   return deriveSiteStats(
-    d.total_numbers ?? 0,
-    d.total_reports ?? 0,
-    d.type_counts ?? {},
-    d.area_codes ?? {}
+    norm.totalNumbers,
+    norm.totalReports,
+    norm.typeCounts,
+    norm.areaCodeCounts
   );
 }
 
