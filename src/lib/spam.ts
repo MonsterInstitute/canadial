@@ -143,9 +143,80 @@ export type SiteStats = {
   topProvince: { name: string; count: number } | null;
 };
 
-// One full pass over spam_reports that powers the homepage stats bar, area-code
-// grid, and province heatmap — cheaper than scanning the table once per widget.
+// Build the full SiteStats shape from three raw aggregates: the distinct-number
+// total, per-type report counts, and per-area-code distinct-number counts.
+// Province rollups, most-common type, and busiest province are derived here so
+// the area-code → province mapping lives in exactly one place. Shared by the
+// fast RPC path and the row-scan fallback.
+function deriveSiteStats(
+  totalNumbers: number,
+  totalReports: number,
+  typeCounts: Record<string, number>,
+  areaCodeCounts: Record<string, number>
+): SiteStats {
+  const provinceCounts: Record<string, number> = {};
+  for (const [code, count] of Object.entries(areaCodeCounts)) {
+    // The heatmap and "most active province" only make sense for real
+    // geographic area codes — skip toll-free and unrecognised codes.
+    if (isCanadianAreaCode(code)) {
+      const prov = provinceForAreaCode(code);
+      provinceCounts[prov] = (provinceCounts[prov] ?? 0) + count;
+    }
+  }
+
+  const mostCommonType =
+    Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const topEntry = Object.entries(provinceCounts).sort(
+    (a, b) => b[1] - a[1]
+  )[0];
+  const topProvince = topEntry
+    ? { name: topEntry[0], count: topEntry[1] }
+    : null;
+
+  return {
+    totalNumbers,
+    totalReports,
+    mostCommonType,
+    typeCounts,
+    areaCodeCounts,
+    provinceCounts,
+    topProvince,
+  };
+}
+
+// Fast path: a single Postgres aggregation (see the get_site_stats() migration)
+// instead of paging the whole table into the app. Falls back to a full row scan
+// if the function hasn't been applied to the database yet, so the homepage keeps
+// working either way.
 export async function getSiteStats(): Promise<SiteStats> {
+  const { data, error } = await supabaseAdmin.rpc("get_site_stats");
+  if (error || !data) {
+    if (error) {
+      console.error(
+        "get_site_stats RPC failed, falling back to scan:",
+        error.message
+      );
+    }
+    return getSiteStatsByScan();
+  }
+  const d = data as {
+    total_numbers?: number;
+    total_reports?: number;
+    type_counts?: Record<string, number>;
+    area_codes?: Record<string, number>;
+  };
+  return deriveSiteStats(
+    d.total_numbers ?? 0,
+    d.total_reports ?? 0,
+    d.type_counts ?? {},
+    d.area_codes ?? {}
+  );
+}
+
+// Fallback aggregation: page through spam_reports and roll the stats up in the
+// app. Slow on large tables — kept only for databases where get_site_stats()
+// isn't present.
+async function getSiteStatsByScan(): Promise<SiteStats> {
   const numbers = new Set<string>();
   const typeCounts: Record<string, number> = {};
   let totalReports = 0;
@@ -158,7 +229,7 @@ export async function getSiteStats(): Promise<SiteStats> {
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
-      console.error("getSiteStats failed:", error.message);
+      console.error("getSiteStatsByScan failed:", error.message);
       break;
     }
     if (!data || data.length === 0) break;
@@ -176,36 +247,12 @@ export async function getSiteStats(): Promise<SiteStats> {
   }
 
   const areaCodeCounts: Record<string, number> = {};
-  const provinceCounts: Record<string, number> = {};
   for (const n of numbers) {
     const code = n.slice(0, 3);
     areaCodeCounts[code] = (areaCodeCounts[code] ?? 0) + 1;
-    // The heatmap and "most active province" only make sense for real
-    // geographic area codes — skip toll-free and unrecognised codes.
-    if (isCanadianAreaCode(code)) {
-      const prov = provinceForAreaCode(code);
-      provinceCounts[prov] = (provinceCounts[prov] ?? 0) + 1;
-    }
   }
 
-  const mostCommonType =
-    Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-  const topEntry = Object.entries(provinceCounts).sort(
-    (a, b) => b[1] - a[1]
-  )[0];
-  const topProvince = topEntry
-    ? { name: topEntry[0], count: topEntry[1] }
-    : null;
-
-  return {
-    totalNumbers: numbers.size,
-    totalReports,
-    mostCommonType,
-    typeCounts,
-    areaCodeCounts,
-    provinceCounts,
-    topProvince,
-  };
+  return deriveSiteStats(numbers.size, totalReports, typeCounts, areaCodeCounts);
 }
 
 export type TrendingNumber = {

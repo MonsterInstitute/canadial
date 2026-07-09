@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 };
 
 // Refresh the recent-reports list periodically.
-export const revalidate = 60;
+export const revalidate = 300;
 
 type RecentReport = {
   id: string | number;
