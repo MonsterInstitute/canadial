@@ -45,3 +45,7 @@ scraper*.py
 check_pages.py
 import_orgs.py
 *.csv
+
+# Python
+__pycache__/
+*.pyc
