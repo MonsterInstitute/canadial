@@ -3,9 +3,10 @@ import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import SloganRotator from "@/components/SloganRotator";
 import AdUnit from "@/components/AdUnit";
+import CanadaHeatmap from "@/components/CanadaHeatmap";
 import { supabaseAdmin } from "@/lib/supabase";
 import { formatPhone } from "@/lib/lookup";
-import { getAreaCodeCounts } from "@/lib/spam";
+import { getSiteStats, getTrendingNumbers } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
 import { HREFLANG_ALTERNATES } from "@/lib/i18n";
 
@@ -45,17 +46,53 @@ async function getRecentReports(): Promise<RecentReport[]> {
   }
 }
 
+// Province labels are stored long ("Nova Scotia / PEI"); trim to something that
+// fits a stat tile.
+function shortProvince(name: string): string {
+  return name.replace(" & ", " & ").split(" / ")[0];
+}
+
+// A short, human date for the trending strip, e.g. "Jul 2".
+function shortDate(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+}
+
+function StatTile({
+  value,
+  label,
+}: {
+  value: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <div className="flex flex-col items-center px-4 py-3 text-center">
+      <span className="text-2xl font-bold text-zinc-900 sm:text-3xl">
+        {value}
+      </span>
+      <span className="mt-0.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export default async function Home() {
-  const [reports, areaCodeCounts] = await Promise.all([
+  const [reports, stats, trending] = await Promise.all([
     getRecentReports(),
-    getAreaCodeCounts(),
+    getSiteStats(),
+    getTrendingNumbers(5),
   ]);
 
   // Every area code with data, busiest first — gives crawlers a path to all
   // area-code pages, and from there to every individual number page.
-  const areaCodes = Object.entries(areaCodeCounts).sort(
+  const areaCodes = Object.entries(stats.areaCodeCounts).sort(
     (a, b) => b[1] - a[1]
   );
+
+  const hasProvinceData =
+    Object.values(stats.provinceCounts).some((c) => c > 0);
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4">
@@ -74,6 +111,93 @@ export default async function Home() {
           <SearchBar autoFocus />
         </div>
       </section>
+
+      {/* Live stats — gives the homepage concrete, unique numbers that update as
+          the database grows. */}
+      {stats.totalNumbers > 0 && (
+        <section className="mb-12 -mt-6">
+          <div className="grid grid-cols-1 divide-y divide-zinc-200 rounded-2xl border border-zinc-200 bg-white sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <StatTile
+              value={stats.totalNumbers.toLocaleString("en-CA")}
+              label="Numbers tracked"
+            />
+            <StatTile
+              value={stats.mostCommonType ?? "—"}
+              label="Most reported type"
+            />
+            <StatTile
+              value={
+                stats.topProvince ? shortProvince(stats.topProvince.name) : "—"
+              }
+              label="Most active province"
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Trending this week — the newest reported numbers, with a type badge. */}
+      {trending.length > 0 && (
+        <section className="pb-12">
+          <div className="mb-4 flex items-baseline justify-between">
+            <h2 className="text-xl font-semibold text-zinc-900">
+              🔥 Trending this week
+            </h2>
+            <span className="text-xs text-zinc-500">
+              Newest reported numbers
+            </span>
+          </div>
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {trending.map((t) => (
+              <li key={t.phone_number}>
+                <Link
+                  href={`/lookup/${t.phone_number}`}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-4 py-3 transition-colors hover:border-canada hover:bg-red-50"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-zinc-900">
+                      {formatPhone(t.phone_number)}
+                    </div>
+                    {shortDate(t.created_at) && (
+                      <div className="text-xs text-zinc-400">
+                        Reported {shortDate(t.created_at)}
+                      </div>
+                    )}
+                  </div>
+                  <span className="shrink-0 rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-canada">
+                    {t.type || "Spam"}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Where spam is being reported across Canada. */}
+      {hasProvinceData && (
+        <section className="pb-12">
+          <h2 className="mb-1 text-xl font-semibold text-zinc-900">
+            Spam reports across Canada
+          </h2>
+          <p className="mb-4 text-sm text-zinc-600">
+            Provinces shaded by how many numbers Canadians have reported.
+            {stats.topProvince ? (
+              <>
+                {" "}
+                <strong className="text-zinc-800">
+                  {shortProvince(stats.topProvince.name)}
+                </strong>{" "}
+                leads with {stats.topProvince.count.toLocaleString("en-CA")}{" "}
+                reported number
+                {stats.topProvince.count === 1 ? "" : "s"}.
+              </>
+            ) : null}
+          </p>
+          <div className="rounded-2xl border border-zinc-200 p-4 sm:p-6">
+            <CanadaHeatmap provinceCounts={stats.provinceCounts} />
+          </div>
+        </section>
+      )}
 
       {areaCodes.length > 0 && (
         <section className="pb-12">

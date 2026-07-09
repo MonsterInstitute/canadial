@@ -17,7 +17,7 @@ export type ReportFormLabels = {
   error: string;
 };
 
-const DEFAULT_LABELS: ReportFormLabels = {
+export const DEFAULT_LABELS: ReportFormLabels = {
   isSpam: "This number is spam / unwanted",
   type: "Type of call",
   comment: "Comment",
@@ -28,13 +28,25 @@ const DEFAULT_LABELS: ReportFormLabels = {
   error: "Could not save your report. Please try again.",
 };
 
-function SubmitButton({ submit, submitting }: { submit: string; submitting: string }) {
+function SubmitButton({
+  submit,
+  submitting,
+  prominent,
+}: {
+  submit: string;
+  submitting: string;
+  prominent?: boolean;
+}) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
       disabled={pending}
-      className="rounded-lg bg-canada px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+      className={
+        prominent
+          ? "w-full rounded-xl bg-canada px-6 py-3.5 text-center text-base font-bold text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-60 sm:w-auto sm:text-lg"
+          : "rounded-lg bg-canada px-5 py-2.5 font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+      }
     >
       {pending ? submitting : submit}
     </button>
@@ -44,9 +56,11 @@ function SubmitButton({ submit, submitting }: { submit: string; submitting: stri
 export default function ReportForm({
   phoneNumber,
   labels,
+  prominent,
 }: {
   phoneNumber: string;
   labels?: ReportFormLabels;
+  prominent?: boolean;
 }) {
   const t = labels ?? DEFAULT_LABELS;
   const [state, formAction] = useActionState<ReportState, FormData>(
@@ -95,8 +109,18 @@ export default function ReportForm({
         />
       </label>
 
-      <div className="flex items-center gap-3">
-        <SubmitButton submit={t.submit} submitting={t.submitting} />
+      <div
+        className={
+          prominent
+            ? "flex flex-col items-stretch gap-2 sm:flex-row sm:items-center"
+            : "flex items-center gap-3"
+        }
+      >
+        <SubmitButton
+          submit={t.submit}
+          submitting={t.submitting}
+          prominent={prominent}
+        />
         {state.message && (
           <span
             className={`text-sm ${state.ok ? "text-green-600" : "text-canada"}`}

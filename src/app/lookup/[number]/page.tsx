@@ -12,7 +12,7 @@ import {
   isCanadianAreaCode,
 } from "@/lib/provinces";
 import { SITE_URL } from "@/lib/config";
-import ReportForm from "@/components/ReportForm";
+import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 
 // Cache each number page and regenerate hourly — keeps crawls cheap.
@@ -828,6 +828,27 @@ export default async function LookupPage({ params }: Props) {
         )}
       </section>
 
+      {/* Unknown numbers: surface the report form immediately, with a prominent
+          "be the first" call to action, so the page has a clear primary task. */}
+      {result.type === "unknown" && (
+        <section className="mt-4 rounded-2xl border-2 border-canada/30 bg-red-50/60 p-5 sm:p-6">
+          <h2 className="text-xl font-bold text-zinc-900 sm:text-2xl">
+            Be the first to report this number
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+            Got a call from <span className="font-semibold">{pretty}</span>? Add
+            a quick report to warn other Canadians and build its history.
+          </p>
+          <div className="mt-4">
+            <ReportForm
+              phoneNumber={normalized}
+              prominent
+              labels={{ ...DEFAULT_LABELS, submit: "Report this number 🍁" }}
+            />
+          </div>
+        </section>
+      )}
+
       {/* Warm reassurance tailored to the kind of spam */}
       {result.type === "spam" && (
         <Reassurance
@@ -883,13 +904,16 @@ export default async function LookupPage({ params }: Props) {
       {/* Ad */}
       <AdUnit className="mt-8" />
 
-      {/* Report form */}
-      <section className="mt-8">
-        <h2 className="mb-3 text-lg font-semibold">Report this number</h2>
-        <div className="rounded-xl border border-zinc-200 p-5">
-          <ReportForm phoneNumber={normalizePhone(number)} />
-        </div>
-      </section>
+      {/* Report form. For unknown numbers this already appears prominently near
+          the top, so we don't repeat it here. */}
+      {result.type !== "unknown" && (
+        <section className="mt-8">
+          <h2 className="mb-3 text-lg font-semibold">Report this number</h2>
+          <div className="rounded-xl border border-zinc-200 p-5">
+            <ReportForm phoneNumber={normalized} />
+          </div>
+        </section>
+      )}
     </div>
   );
 }

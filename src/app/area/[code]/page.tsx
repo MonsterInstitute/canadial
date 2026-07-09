@@ -90,6 +90,26 @@ export default async function AreaPage({ params }: Props) {
     Object.entries(typeBuckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   const typeCount = (t: string) => typeBuckets[t] ?? 0;
 
+  // Visual breakdown of caller types across the area code. "Other" folds in
+  // every category that isn't one of the three headline types (e.g. Debt
+  // Collector, or numbers with no recorded type).
+  const scamCount = typeCount("Scam");
+  const teleCount = typeCount("Telemarketer");
+  const roboCount = typeCount("Robocall");
+  const otherCount = Math.max(
+    0,
+    numbers.length - scamCount - teleCount - roboCount
+  );
+  const breakdown = [
+    { label: "Scam", count: scamCount, color: "#d52b1e" },
+    { label: "Telemarketer", count: teleCount, color: "#f59e0b" },
+    { label: "Robocall", count: roboCount, color: "#7c3aed" },
+    { label: "Other", count: otherCount, color: "#a1a1aa" },
+  ];
+  const breakdownTotal = numbers.length;
+  const pct = (n: number) =>
+    breakdownTotal > 0 ? Math.round((n / breakdownTotal) * 100) : 0;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -221,6 +241,46 @@ export default async function AreaPage({ params }: Props) {
             ) : null}{" "}
             Help your community by reporting calls you receive.
           </p>
+        </section>
+      )}
+
+      {/* CSS-only visual breakdown of caller types in this area code. */}
+      {numbers.length > 0 && (
+        <section className="mt-5">
+          <h2 className="mb-3 text-sm font-semibold text-zinc-700">
+            Reported types in the {code} area code
+          </h2>
+          <div className="flex h-4 w-full overflow-hidden rounded-full bg-zinc-100">
+            {breakdown.map((s) =>
+              s.count > 0 ? (
+                <div
+                  key={s.label}
+                  className="h-full"
+                  style={{
+                    width: `${(s.count / breakdownTotal) * 100}%`,
+                    backgroundColor: s.color,
+                  }}
+                  title={`${s.label}: ${s.count} (${pct(s.count)}%)`}
+                />
+              ) : null
+            )}
+          </div>
+          <ul className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+            {breakdown.map((s) => (
+              <li key={s.label} className="flex items-center gap-2">
+                <span
+                  className="h-3 w-3 shrink-0 rounded-sm"
+                  style={{ backgroundColor: s.color }}
+                  aria-hidden
+                />
+                <span className="text-zinc-600">
+                  <span className="font-semibold text-zinc-900">{s.label}</span>{" "}
+                  {pct(s.count)}%
+                  <span className="text-zinc-400"> ({s.count})</span>
+                </span>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
