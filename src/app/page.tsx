@@ -17,6 +17,12 @@ export const metadata: Metadata = {
 // Refresh the recent-reports list periodically.
 export const revalidate = 300;
 
+// The homepage aggregates over the full spam_reports table (get_site_stats runs
+// several count(distinct) scans, ~9s on a 300k-row table). Give the render enough
+// headroom to finish so background ISR regeneration reliably replaces the cached
+// page instead of timing out and freezing a stale/degraded prerender.
+export const maxDuration = 60;
+
 type RecentReport = {
   id: string | number;
   phone_number: string;
