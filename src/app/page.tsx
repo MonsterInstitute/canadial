@@ -33,23 +33,35 @@ type RecentReport = {
 };
 
 async function getRecentReports(): Promise<RecentReport[]> {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from("spam_reports")
-      .select("id, phone_number, type, comment, is_spam, created_at")
-      .order("created_at", { ascending: false })
-      .limit(10);
-    if (error) {
-      // Surface the real reason (e.g. RLS / missing grant) instead of silently
-      // rendering "No reports yet".
-      console.error("getRecentReports failed:", error.message);
-      return [];
+  // Filter on is_spam so this hits the same index as the "Trending" query. An
+  // unfiltered `order by created_at` is a full sort of the whole table, which
+  // loses to the DB contention created when the build prerenders hundreds of
+  // pages at once — that's what left this list empty ("No reports yet") even
+  // though the data was there. Retry a couple of times to ride out transient
+  // load before giving up.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from("spam_reports")
+        .select("id, phone_number, type, comment, is_spam, created_at")
+        .eq("is_spam", true)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (error) {
+        console.error(
+          `getRecentReports attempt ${attempt + 1} failed:`,
+          error.message
+        );
+      } else if (data && data.length > 0) {
+        return data;
+      }
+    } catch (e) {
+      console.error(`getRecentReports attempt ${attempt + 1} threw:`, e);
     }
-    return data ?? [];
-  } catch (e) {
-    console.error("getRecentReports threw:", e);
-    return [];
+    // Brief backoff before retrying.
+    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
   }
+  return [];
 }
 
 // Province labels are stored long ("Nova Scotia / PEI"); trim to something that
