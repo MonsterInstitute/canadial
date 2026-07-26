@@ -8,7 +8,8 @@ import { formatPhone } from "@/lib/phone";
 import { SITE_URL } from "@/lib/config";
 import SearchBar from "@/components/SearchBar";
 
-export const revalidate = 3600;
+// ISR: regenerate daily (see src/app/area/[code]/page.tsx for the English page).
+export const revalidate = 86400;
 
 type Props = { params: Promise<{ lang: string; code: string }> };
 

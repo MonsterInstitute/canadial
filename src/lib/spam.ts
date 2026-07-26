@@ -35,8 +35,7 @@ function mostCommon(items: string[]): string | null {
   return best;
 }
 
-// All distinct, valid 10-digit phone numbers in the database.
-export async function getAllPhoneNumbers(): Promise<string[]> {
+async function fetchAllPhoneNumbers(): Promise<string[]> {
   const set = new Set<string>();
   for (let page = 0; page < MAX_PAGES; page++) {
     const from = page * PAGE;
@@ -58,42 +57,75 @@ export async function getAllPhoneNumbers(): Promise<string[]> {
   return Array.from(set);
 }
 
-// Distinct-number counts grouped by 3-digit area code.
-export async function getAreaCodeCounts(): Promise<Record<string, number>> {
-  const numbers = await getAllPhoneNumbers();
-  const counts: Record<string, number> = {};
-  for (const n of numbers) {
-    const code = n.slice(0, 3);
-    counts[code] = (counts[code] ?? 0) + 1;
+let phoneNumbersCache: { at: number; promise: Promise<string[]> } | null = null;
+const PHONE_NUMBERS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// All distinct, valid 10-digit phone numbers in the database. The sitemap
+// renders one shard per request — dozens of shards across ~300k numbers ×
+// every locale — and every shard used to independently re-scan the whole
+// table for this same list, which was the single largest source of Supabase
+// egress on this site. Memoizing per warm process collapses that back down to
+// one scan per cache window, however many shards end up sharing the process.
+export async function getAllPhoneNumbers(): Promise<string[]> {
+  const now = Date.now();
+  if (!phoneNumbersCache || now - phoneNumbersCache.at > PHONE_NUMBERS_CACHE_TTL_MS) {
+    phoneNumbersCache = { at: now, promise: fetchAllPhoneNumbers() };
   }
-  return counts;
+  try {
+    return await phoneNumbersCache.promise;
+  } catch (e) {
+    phoneNumbersCache = null;
+    throw e;
+  }
 }
 
-// Per-number aggregates for a single area code, busiest first.
-export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]> {
-  const rows: {
-    phone_number: string;
-    type: string | null;
-    comment: string | null;
-    is_spam: boolean | null;
-    created_at: string;
-  }[] = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE;
-    const { data, error } = await supabaseAdmin
-      .from("spam_reports")
-      .select("phone_number, type, comment, is_spam, created_at")
-      .like("phone_number", `${code}%`)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) {
-      console.error(`getNumbersForAreaCode(${code}) failed:`, error.message);
-      break;
+// Distinct-number counts grouped by 3-digit area code, via a single Postgres
+// aggregation (see the get_area_code_counts() migration) instead of paging the
+// whole table into the app. Falls back to a full scan if the function isn't
+// deployed yet, so language landing pages keep working either way.
+export async function getAreaCodeCounts(): Promise<Record<string, number>> {
+  const { data, error } = await supabaseAdmin.rpc("get_area_code_counts");
+  if (error) {
+    console.error(
+      "get_area_code_counts RPC failed, falling back to full scan:",
+      error.message
+    );
+  } else if (data && typeof data === "object") {
+    const counts: Record<string, number> = {};
+    for (const [code, n] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof n === "number" && n > 0) counts[code] = n;
     }
-    if (!data || data.length === 0) break;
-    rows.push(...data);
-    if (data.length < PAGE) break;
+    if (Object.keys(counts).length > 0) return counts;
   }
+
+  const numbers = await getAllPhoneNumbers();
+  const fallback: Record<string, number> = {};
+  for (const n of numbers) {
+    const code = n.slice(0, 3);
+    fallback[code] = (fallback[code] ?? 0) + 1;
+  }
+  return fallback;
+}
+
+const AREA_CODE_ROW_LIMIT = 100;
+
+// Per-number aggregates for a single area code, busiest first. Bounded to the
+// AREA_CODE_ROW_LIMIT most recent reports for the code — area pages only ever
+// display a handful of numbers, and paging in a high-volume code's entire
+// history was a major source of egress. Counts and ranking below reflect
+// these recent reports, not the code's full lifetime history.
+export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]> {
+  const { data, error } = await supabaseAdmin
+    .from("spam_reports")
+    .select("phone_number, type, comment, is_spam, created_at")
+    .like("phone_number", `${code}%`)
+    .order("created_at", { ascending: false })
+    .limit(AREA_CODE_ROW_LIMIT);
+  if (error) {
+    console.error(`getNumbersForAreaCode(${code}) failed:`, error.message);
+    return [];
+  }
+  const rows = data ?? [];
 
   const byNumber = new Map<string, AreaNumber & { _types: string[] }>();
   for (const r of rows) {
@@ -335,12 +367,15 @@ export type TrendingNumber = {
 // The most recently reported distinct spam numbers, newest first. Powers the
 // homepage "Trending this week" strip.
 export async function getTrendingNumbers(limit = 5): Promise<TrendingNumber[]> {
+  // Already scoped (is_spam filter + needed columns only) rather than a full
+  // scan. 100 rows gives good odds of finding `limit` distinct numbers among
+  // recent reports without over-fetching.
   const { data, error } = await supabaseAdmin
     .from("spam_reports")
     .select("phone_number, type, comment, created_at")
     .eq("is_spam", true)
     .order("created_at", { ascending: false })
-    .limit(300);
+    .limit(100);
   if (error) {
     console.error("getTrendingNumbers failed:", error.message);
     return [];

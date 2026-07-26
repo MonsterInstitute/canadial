@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { getReportableMonths } from "@/lib/reports";
 import { REPORTS_CONTENT, getLocale, interp } from "@/lib/i18n";
 
-export const revalidate = 86400;
+export const revalidate = 604800; // weekly — matches src/app/reports/page.tsx
 
 export function generateStaticParams() {
   return Object.keys(REPORTS_CONTENT).map((lang) => ({ lang }));

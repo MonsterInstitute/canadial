@@ -5,7 +5,9 @@ import { LOCALES } from "@/lib/i18n";
 import { CHUNK_SIZE, planShards, lookupPrefix } from "@/lib/sitemap-shards";
 import { SITE_URL } from "@/lib/config";
 
-// Revalidate hourly as new numbers get reported.
+// Revalidate daily. Every shard needs the full number list; that scan is
+// memoized across shards in getAllPhoneNumbers() (src/lib/spam.ts) so a
+// sitemap rebuild doesn't rescan the whole table once per shard.
 export const revalidate = 86400;
 
 const LANGS = LOCALES.filter((l) => l.code !== "en");

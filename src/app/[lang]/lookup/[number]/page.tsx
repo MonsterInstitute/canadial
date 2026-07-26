@@ -13,7 +13,8 @@ import {
 import { SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
 
-export const revalidate = 3600;
+// Cache each number page and regenerate daily (see src/app/lookup/[number]/page.tsx).
+export const revalidate = 86400;
 
 type Props = { params: Promise<{ lang: string; number: string }> };
 type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;

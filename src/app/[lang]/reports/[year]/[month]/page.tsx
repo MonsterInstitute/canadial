@@ -7,11 +7,11 @@ import { REPORTS_CONTENT, getLocale, interp } from "@/lib/i18n";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 
 // On-demand ISR (no generateStaticParams): each localized month renders from
-// live data on first request, then caches for a day. All months — including new
-// ones like July 2026 — work automatically via the dynamic /[lang]/reports
+// live data on first request, then caches for a week. All months — including
+// new ones like July 2026 — work automatically via the dynamic /[lang]/reports
 // index and the sitemap, without prerendering 7 locales × every month (each a
 // full-table scan) at build time.
-export const revalidate = 86400;
+export const revalidate = 604800; // weekly — matches src/app/reports/[year]/[month]/page.tsx
 
 type Props = { params: Promise<{ lang: string; year: string; month: string }> };
 

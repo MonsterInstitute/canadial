@@ -15,8 +15,9 @@ import { SITE_NAME, SITE_URL } from "@/lib/config";
 import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 
-// Cache each number page and regenerate hourly — keeps crawls cheap.
-export const revalidate = 3600;
+// Cache each number page and regenerate daily — keeps crawls (and egress
+// across ~300k number pages) cheap.
+export const revalidate = 86400;
 
 // generateMetadata and the page render both need the lookup; cache() dedupes
 // them into a single DB call per request.

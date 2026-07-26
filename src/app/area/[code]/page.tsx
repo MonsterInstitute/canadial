@@ -9,9 +9,9 @@ import { formatPhone, cleanComment } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 import SearchBar from "@/components/SearchBar";
 
-// ISR: regenerate hourly. Pre-render the well-known area codes at build time;
+// ISR: regenerate daily. Pre-render the well-known area codes at build time;
 // any other 3-digit code still renders on demand.
-export const revalidate = 3600;
+export const revalidate = 86400;
 
 // Shared between generateMetadata and the page render so we only aggregate the
 // area code's numbers once per request.
