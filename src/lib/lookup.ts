@@ -28,6 +28,7 @@ export async function lookupPhone(phone: string) {
     .from('spam_reports')
     .select('*')
     .eq('phone_number', normalized)
+    .eq('hidden', false)
     .order('created_at', { ascending: false })
 
   if (reports && reports.length > 0) {

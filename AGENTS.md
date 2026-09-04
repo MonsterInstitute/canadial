@@ -68,6 +68,45 @@ That difference is the entire reason `get_area_summary()` exists.
    of inactivity. Reads are now almost entirely cache-served, so
    `.github/workflows/daily-import.yml` doubles as the keep-alive.
 
+## Moderation
+
+The report form takes free text, so some comment will eventually have to come
+down — abuse, a doxxed detail, a business disputing a claim about its number.
+Reports are hidden, never deleted:
+
+```bash
+# list what is currently hidden
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://www.canadial.com/api/admin/moderate
+
+# hide a report (find its id in the JSON above, or in the database)
+curl -X POST https://www.canadial.com/api/admin/moderate \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"id":"<report uuid>","hidden":true,"reason":"abusive comment"}'
+
+# undo — the same call with hidden:false
+```
+
+`ADMIN_TOKEN` is a Vercel production environment variable. The endpoint fails
+closed: unset token means 503, never open access.
+
+The endpoint revalidates the number page, its area page and the homepage, so a
+hidden report disappears immediately rather than at the next ISR window (a day
+for number pages).
+
+Why hide instead of delete:
+
+- A moderation call can be wrong, and an UPDATE is trivially reversible.
+- A disputed report is evidence. If the number's owner escalates, what was
+  posted and when still has to be answerable.
+- No code path needs DELETE, so `service_role` never gets it — only `postgres`
+  can delete. A bug can hide rows; it cannot destroy them.
+
+**Any new query against `spam_reports` must filter `hidden = false`.** Nine
+TypeScript read paths and three RPCs (`get_site_stats`, `get_area_code_counts`,
+`get_area_summary`) do. Miss one and a hidden comment vanishes from the page
+while still inflating the counts printed beside it.
+
 ## Watch
 
 `.github/workflows/health.yml` asserts all five invariants above every day and

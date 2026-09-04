@@ -56,6 +56,7 @@ async function fetchAllRows(): Promise<Row[]> {
     const { data, error } = await supabaseAdmin
       .from("spam_reports")
       .select("phone_number, type, created_at")
+      .eq("hidden", false)
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
@@ -74,11 +75,13 @@ export async function getReportableMonths(): Promise<{ year: number; month: numb
   const { data: minData } = await supabaseAdmin
     .from("spam_reports")
     .select("created_at")
+    .eq("hidden", false)
     .order("created_at", { ascending: true })
     .limit(1);
   const { data: maxData } = await supabaseAdmin
     .from("spam_reports")
     .select("created_at")
+    .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(1);
   if (!minData?.length || !maxData?.length) return [];

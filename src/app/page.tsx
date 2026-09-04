@@ -49,6 +49,7 @@ async function getRecentReports(): Promise<RecentReport[]> {
         .from("spam_reports")
         .select("id, phone_number, type, comment, is_spam, created_at")
         .eq("is_spam", true)
+        .eq("hidden", false)
         .order("created_at", { ascending: false })
         .limit(10);
       if (error) {

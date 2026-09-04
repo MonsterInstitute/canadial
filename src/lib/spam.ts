@@ -42,6 +42,7 @@ async function fetchAllPhoneNumbers(): Promise<string[]> {
     const { data, error } = await supabaseAdmin
       .from("spam_reports")
       .select("phone_number")
+      .eq("hidden", false)
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
@@ -119,6 +120,7 @@ export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]>
     .from("spam_reports")
     .select("phone_number, type, comment, is_spam, created_at")
     .like("phone_number", `${code}%`)
+    .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(AREA_CODE_ROW_LIMIT);
   if (error) {
@@ -409,6 +411,7 @@ async function getSiteStatsByScan(): Promise<SiteStats> {
     const { data, error } = await supabaseAdmin
       .from("spam_reports")
       .select("phone_number, type, is_spam")
+      .eq("hidden", false)
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
@@ -455,6 +458,7 @@ export async function getTrendingNumbers(limit = 5): Promise<TrendingNumber[]> {
     .from("spam_reports")
     .select("phone_number, type, comment, created_at")
     .eq("is_spam", true)
+    .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(100);
   if (error) {
