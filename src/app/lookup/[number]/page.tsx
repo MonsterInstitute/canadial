@@ -3,7 +3,7 @@ import Link from "next/link";
 import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
 import { cleanComment, isFtcSource, describeFtcReport } from "@/lib/phone";
-import { getNumbersForAreaCode, type AreaNumber } from "@/lib/spam";
+import { getAreaSummary, type AreaNumber } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
 import {
   provinceForAreaCode,
@@ -746,25 +746,15 @@ export default async function LookupPage({ params }: Props) {
   const province = provinceForAreaCode(code);
   const faq = buildFaq(pretty, code, region, province, result);
 
-  // All reported numbers in this area code, used for both the neighbourhood
-  // list and the area-wide scam-trend stats.
-  const areaNumbers = await getNumbersForAreaCode(code);
-  const related: AreaNumber[] = areaNumbers
+  // Area-code context, aggregated in Postgres rather than by pulling the
+  // code's recent reports in and reducing them here. This route renders for
+  // ~336k numbers, so the summary is deliberately ~1 KB instead of ~21 KB.
+  const area = await getAreaSummary(code);
+  const related: AreaNumber[] = area.topNumbers
     .filter((n) => n.phone_number !== normalized)
     .slice(0, 5);
-
-  // Most commonly reported caller type across the whole area code.
-  const areaTypeBuckets: Record<string, number> = {};
-  for (const n of areaNumbers) {
-    const t = n.most_common_type || "Other";
-    areaTypeBuckets[t] = (areaTypeBuckets[t] ?? 0) + 1;
-  }
-  const areaTopType =
-    Object.entries(areaTypeBuckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-
-  // Total number of reports across the whole area code — powers the
-  // "reported X times in the [region] area" line.
-  const areaReportTotal = areaNumbers.reduce((s, n) => s + n.report_count, 0);
+  const areaTopType = area.topType;
+  const areaReportTotal = area.reportTotal;
 
   // The most common type for *this* number drives the "what to do" advice;
   // fall back to null (generic advice) for legitimate/unknown numbers.
@@ -980,7 +970,7 @@ export default async function LookupPage({ params }: Props) {
         code={code}
         region={region}
         province={province}
-        reportedNumberCount={areaNumbers.length}
+        reportedNumberCount={area.numberCount}
         topType={areaTopType}
         reportTotal={areaReportTotal}
       />

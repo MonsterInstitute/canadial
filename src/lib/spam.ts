@@ -162,6 +162,74 @@ export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]>
   return out;
 }
 
+// Just enough about an area code to render the context blocks on a number
+// page: the headline counts, the modal caller type, and a few numbers to link
+// to. See the get_area_summary() migration for why this exists — the number
+// pages are the highest-volume route on the site (~336k of them), so this is
+// the one read path where payload size actually decides whether the monthly
+// egress budget holds.
+export type AreaSummary = {
+  numberCount: number;
+  reportTotal: number;
+  topType: string | null;
+  topNumbers: AreaNumber[];
+};
+
+type AreaSummaryRow = {
+  phone_number?: unknown;
+  report_count?: unknown;
+  most_common_type?: unknown;
+  latest_comment?: unknown;
+};
+
+// Derive the summary from a full getNumbersForAreaCode() scan. Used only when
+// the RPC is unavailable, so a missing migration degrades to the old (heavier)
+// behaviour instead of an empty page.
+function summarizeAreaNumbers(numbers: AreaNumber[]): AreaSummary {
+  const buckets: Record<string, number> = {};
+  for (const n of numbers) {
+    const t = n.most_common_type || "Other";
+    buckets[t] = (buckets[t] ?? 0) + 1;
+  }
+  return {
+    numberCount: numbers.length,
+    reportTotal: numbers.reduce((s, n) => s + n.report_count, 0),
+    topType: Object.entries(buckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
+    topNumbers: numbers.slice(0, 6),
+  };
+}
+
+export async function getAreaSummary(code: string): Promise<AreaSummary> {
+  const { data, error } = await supabaseAdmin.rpc("get_area_summary", {
+    p_code: code,
+  });
+  if (error) {
+    console.error(
+      `get_area_summary(${code}) RPC failed, falling back to scan:`,
+      error.message
+    );
+    return summarizeAreaNumbers(await getNumbersForAreaCode(code));
+  }
+
+  const d = (data ?? {}) as Record<string, unknown>;
+  const rows = Array.isArray(d.top_numbers) ? (d.top_numbers as AreaSummaryRow[]) : [];
+  return {
+    numberCount: typeof d.number_count === "number" ? d.number_count : 0,
+    reportTotal: typeof d.report_total === "number" ? d.report_total : 0,
+    topType: typeof d.top_type === "string" ? d.top_type : null,
+    topNumbers: rows.map((r) => ({
+      phone_number: String(r.phone_number ?? ""),
+      report_count: typeof r.report_count === "number" ? r.report_count : 0,
+      // spam_count isn't part of the summary — the number pages never read it.
+      spam_count: 0,
+      most_common_type:
+        typeof r.most_common_type === "string" ? r.most_common_type : null,
+      latest_comment:
+        typeof r.latest_comment === "string" ? r.latest_comment : null,
+    })),
+  };
+}
+
 export type SiteStats = {
   totalNumbers: number;
   totalReports: number;
