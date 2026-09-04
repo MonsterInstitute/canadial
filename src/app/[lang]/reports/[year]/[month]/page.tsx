@@ -6,12 +6,18 @@ import { formatPhone } from "@/lib/phone";
 import { REPORTS_CONTENT, getLocale, interp } from "@/lib/i18n";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 
-// On-demand ISR (no generateStaticParams): each localized month renders from
-// live data on first request, then caches for a week. All months — including
-// new ones like July 2026 — work automatically via the dynamic /[lang]/reports
-// index and the sitemap, without prerendering 7 locales × every month (each a
-// full-table scan) at build time.
+// On-demand ISR: each localized month renders from live data on first request,
+// then caches for a week. All months — including new ones — work automatically
+// via the /[lang]/reports index and the sitemap, without prerendering 11
+// locales × every month (each a full-table scan) at build time.
 export const revalidate = 604800; // weekly — matches src/app/reports/[year]/[month]/page.tsx
+
+// Returning [] (rather than omitting this) is what makes the route ISR instead
+// of fully dynamic — see the note in src/app/lookup/[number]/page.tsx. Nothing
+// is prerendered at build time; pages cache on first request.
+export function generateStaticParams() {
+  return [];
+}
 
 type Props = { params: Promise<{ lang: string; year: string; month: string }> };
 

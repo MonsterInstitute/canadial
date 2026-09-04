@@ -16,8 +16,20 @@ import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 
 // Cache each number page and regenerate daily — keeps crawls (and egress
-// across ~300k number pages) cheap.
+// across ~336k number pages) cheap.
 export const revalidate = 86400;
+
+// Required for `revalidate` to actually apply. Without a generateStaticParams
+// export, Next treats this route as fully dynamic and re-renders it on every
+// single request — `revalidate` is silently ignored (see
+// node_modules/next/dist/docs/.../generate-static-params.md: "You must return
+// an empty array from generateStaticParams ... in order to revalidate (ISR)
+// paths at runtime"). That was costing ~100+ rows of egress per crawler hit,
+// across every number page. Returning [] prerenders nothing at build time but
+// makes each page ISR-cached on first request.
+export function generateStaticParams() {
+  return [];
+}
 
 // generateMetadata and the page render both need the lookup; cache() dedupes
 // them into a single DB call per request.
