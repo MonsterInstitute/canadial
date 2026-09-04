@@ -70,11 +70,14 @@ begin
     'db_bytes', cur_db,
     'db_mb', round(cur_db / 1048576.0, 1),
     'tup_returned', cur_tup,
-    -- null on the first run, and after a Postgres restart resets the counter
-    -- (detected as a decrease), so the caller treats it as "no reading" rather
-    -- than a bogus negative delta.
+    -- null means "no usable reading", and the caller skips the check rather
+    -- than acting on a bogus number. That covers three cases: the first run;
+    -- a Postgres restart resetting the counter (seen as a decrease); and a
+    -- gap too short to extrapolate from — dividing a few minutes' delta by a
+    -- fraction of a day turns normal traffic into billions of rows/day, which
+    -- is exactly how this first fired a false alarm on a manual re-run.
     'tup_per_day', case
-      when prev.captured_at is null or elapsed is null or elapsed <= 0 then null
+      when prev.captured_at is null or elapsed is null or elapsed < 0.25 then null
       when cur_tup < prev.tup_returned then null
       else round((cur_tup - prev.tup_returned) / elapsed)
     end,

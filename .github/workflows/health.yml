@@ -21,8 +21,11 @@ jobs:
       ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       # Storage: 500 MB free-tier limit. Prune old ftc_dnc rows well before this.
       MAX_DB_MB: '400'
-      # Rows scanned per day. Baseline after the Sept 2026 fixes is ~20M/day;
-      # 150M means something started scanning the whole table again.
+      # Rows scanned per day. Provisional — retune once a week of daily
+      # snapshots exists. For scale: one get_site_stats() call scans ~673k rows,
+      # and the homepage regenerates hourly, so a healthy day is tens of
+      # millions. Reported as null (and skipped) when the gap since the previous
+      # snapshot is under 6h, since a short gap can't be extrapolated to a rate.
       MAX_TUP_PER_DAY: '150000000'
       # Core pages + one entry per area code. Number pages must never be listed.
       MAX_SITEMAP_URLS: '5000'
