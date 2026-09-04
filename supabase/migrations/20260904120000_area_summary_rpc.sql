@@ -31,12 +31,16 @@ returns json
 language sql
 stable
 as $$
+  -- Filter on left(phone_number, 3) alone: that matches
+  -- spam_reports_area_code_created_idx exactly, so the LIMIT is served from the
+  -- index with no sort. An extra `phone_number like p_code || '%'` here would be
+  -- redundant (left() is the stricter test) and pulls the planner toward the
+  -- text_pattern_ops index, which still has to sort.
   with recent as (
     select phone_number, type, comment, created_at
     from public.spam_reports
-    where phone_number like p_code || '%'
+    where left(phone_number, 3) = p_code
       and length(phone_number) = 10
-      and left(phone_number, 3) = p_code
     order by created_at desc
     limit 100
   ),

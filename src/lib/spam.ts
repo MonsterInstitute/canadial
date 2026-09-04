@@ -172,6 +172,9 @@ export type AreaSummary = {
   numberCount: number;
   reportTotal: number;
   topType: string | null;
+  // Distinct numbers grouped by their modal caller type, "Other" covering
+  // untyped numbers. Exact over the whole area code, not just topNumbers.
+  typeCounts: Record<string, number>;
   topNumbers: AreaNumber[];
 };
 
@@ -185,30 +188,39 @@ type AreaSummaryRow = {
 // Derive the summary from a full getNumbersForAreaCode() scan. Used only when
 // the RPC is unavailable, so a missing migration degrades to the old (heavier)
 // behaviour instead of an empty page.
-function summarizeAreaNumbers(numbers: AreaNumber[]): AreaSummary {
-  const buckets: Record<string, number> = {};
+function summarizeAreaNumbers(numbers: AreaNumber[], limit: number): AreaSummary {
+  const typeCounts: Record<string, number> = {};
   for (const n of numbers) {
     const t = n.most_common_type || "Other";
-    buckets[t] = (buckets[t] ?? 0) + 1;
+    typeCounts[t] = (typeCounts[t] ?? 0) + 1;
   }
   return {
     numberCount: numbers.length,
     reportTotal: numbers.reduce((s, n) => s + n.report_count, 0),
-    topType: Object.entries(buckets).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
-    topNumbers: numbers.slice(0, 6),
+    topType:
+      Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
+    typeCounts,
+    topNumbers: numbers.slice(0, limit),
   };
 }
 
-export async function getAreaSummary(code: string): Promise<AreaSummary> {
+// `limit` caps only the returned number list; the counts are exact over the
+// whole area code either way. Number pages want a handful of related numbers,
+// area pages want a page's worth.
+export async function getAreaSummary(
+  code: string,
+  limit = 6
+): Promise<AreaSummary> {
   const { data, error } = await supabaseAdmin.rpc("get_area_summary", {
     p_code: code,
+    p_limit: limit,
   });
   if (error) {
     console.error(
       `get_area_summary(${code}) RPC failed, falling back to scan:`,
       error.message
     );
-    return summarizeAreaNumbers(await getNumbersForAreaCode(code));
+    return summarizeAreaNumbers(await getNumbersForAreaCode(code), limit);
   }
 
   const d = (data ?? {}) as Record<string, unknown>;
@@ -217,6 +229,7 @@ export async function getAreaSummary(code: string): Promise<AreaSummary> {
     numberCount: typeof d.number_count === "number" ? d.number_count : 0,
     reportTotal: typeof d.report_total === "number" ? d.report_total : 0,
     topType: typeof d.top_type === "string" ? d.top_type : null,
+    typeCounts: toNumberMap(d.type_counts),
     topNumbers: rows.map((r) => ({
       phone_number: String(r.phone_number ?? ""),
       report_count: typeof r.report_count === "number" ? r.report_count : 0,
