@@ -72,18 +72,39 @@ for row in rows:
         'ip_hash': 'ftc_open_data',
     })
 
-saved = 0
+# spam_reports.dedupe_key is a generated md5 of (phone_number, comment, source)
+# with a unique index, so re-importing a report we already hold is skipped by
+# the database instead of inserting a duplicate. Before this, repeated imports
+# of overlapping source data left 17,374 duplicate rows and inflated the report
+# counts shown for 8,875 numbers. ignore_duplicates maps to
+# ON CONFLICT (dedupe_key) DO NOTHING.
+#
+# `saved` therefore counts rows *sent*, not rows stored — the database does not
+# report how many it skipped.
+sent = 0
 for i in range(0, len(batch), 500):
     chunk = batch[i:i + 500]
     try:
-        supabase.table('spam_reports').insert(chunk, returning='minimal').execute()
-        saved += len(chunk)
-    except Exception:
+        (
+            supabase.table('spam_reports')
+            .upsert(chunk, on_conflict='dedupe_key',
+                    ignore_duplicates=True, returning='minimal')
+            .execute()
+        )
+        sent += len(chunk)
+    except Exception as e:
+        print(f"Batch insert failed, retrying row by row: {e}")
         for rec in chunk:
             try:
-                supabase.table('spam_reports').insert(rec, returning='minimal').execute()
-                saved += 1
+                (
+                    supabase.table('spam_reports')
+                    .upsert(rec, on_conflict='dedupe_key',
+                            ignore_duplicates=True, returning='minimal')
+                    .execute()
+                )
+                sent += 1
             except Exception:
                 pass
+saved = sent
 
-print(f"Done! +{saved} new numbers from {date_str}")
+print(f"Done! {saved} rows sent for {date_str} (duplicates skipped by the database)")
