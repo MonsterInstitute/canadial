@@ -183,7 +183,7 @@ export default async function LangMonthlyReport({ params }: Props) {
               {report.topAreaCodes.map((c) => (
                 <tr key={c.code}>
                   <td className="px-4 py-3 font-medium text-zinc-900">
-                    <Link href={`/${lang}/area/${c.code}`} className="hover:text-canada">
+                    <Link href={`/area/${c.code}`} className="hover:text-canada">
                       {c.code}
                     </Link>
                   </td>
@@ -228,7 +228,7 @@ export default async function LangMonthlyReport({ params }: Props) {
           {report.topNumbers.map((n) => (
             <li key={n.phone_number}>
               <Link
-                href={`/${lang}/lookup/${n.phone_number}`}
+                href={`/lookup/${n.phone_number}`}
                 className="flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
               >
                 <span className="font-medium text-zinc-900">

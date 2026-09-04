@@ -8,12 +8,10 @@ export default function SearchBar({
   autoFocus = false,
   buttonLabel = "Search",
   placeholder = "(416) 555-1234",
-  lang,
 }: {
   autoFocus?: boolean;
   buttonLabel?: string;
   placeholder?: string;
-  lang?: string;
 }) {
   const router = useRouter();
   const [value, setValue] = useState("");
@@ -27,8 +25,9 @@ export default function SearchBar({
       return;
     }
     setError(null);
-    // Stay within the current language when one is set.
-    router.push(lang ? `/${lang}/lookup/${normalized}` : `/lookup/${normalized}`);
+    // Number pages only exist in English (see src/app/[lang]/ — the
+    // per-locale lookup route was removed).
+    router.push(`/lookup/${normalized}`);
   }
 
   return (

@@ -33,7 +33,7 @@ export default async function LanguagePage({ code }: { code: string }) {
         <SloganRotator className="mb-6 h-6 font-medium text-canada" />
         <p className="mb-8 max-w-xl text-zinc-600">{t.intro}</p>
         <div className="w-full max-w-xl">
-          <SearchBar buttonLabel={t.searchButton} lang={code} />
+          <SearchBar buttonLabel={t.searchButton} />
         </div>
       </section>
 
@@ -68,7 +68,7 @@ export default async function LanguagePage({ code }: { code: string }) {
               return (
                 <Link
                   key={ac}
-                  href={`/${code}/area/${ac}`}
+                  href={`/area/${ac}`}
                   className="flex flex-col rounded-lg border border-zinc-200 px-4 py-3 transition-colors hover:border-canada hover:bg-red-50"
                 >
                   <span className="text-lg font-bold text-zinc-900">{ac}</span>
