@@ -5,7 +5,7 @@ import { cache } from "react";
 import { getAreaSummary } from "@/lib/spam";
 import { AREA_CODES, regionForCode, codesForRegion } from "@/lib/area-codes";
 import { provinceForAreaCode } from "@/lib/provinces";
-import { formatPhone, cleanComment } from "@/lib/phone";
+import { formatPhone, cleanComment, isValidAreaCode } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 import SearchBar from "@/components/SearchBar";
 
@@ -28,7 +28,7 @@ export function generateStaticParams() {
 type Props = { params: Promise<{ code: string }> };
 
 function isValidCode(code: string) {
-  return /^\d{3}$/.test(code);
+  return isValidAreaCode(code);
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {

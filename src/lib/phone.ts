@@ -74,3 +74,10 @@ function ftcSubject(comment: string): string | null {
   }
   return null
 }
+
+// A real NANP area code never starts with 0 or 1. The imported datasets carry
+// junk numbers (0000000000, 1111111111, ...) that would otherwise get their own
+// indexable /lookup and /area pages — 67 such area codes were in the sitemap.
+export function isValidAreaCode(code: string): boolean {
+  return /^[2-9]\d\d$/.test(code);
+}

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
-import { cleanComment, isFtcSource, describeFtcReport } from "@/lib/phone";
+import { cleanComment, isFtcSource, describeFtcReport, isValidAreaCode } from "@/lib/phone";
 import { getAreaSummary, type AreaNumber } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
 import {
@@ -716,6 +717,12 @@ function FaqSection({ faq }: { faq: { q: string; a: string }[] }) {
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
   const pretty = formatPhone(number);
+
+  // 404 rather than render a page for a number that cannot exist. The imported
+  // datasets contain junk like 1111111111 and 0000000000, and each one was
+  // otherwise getting a real, indexable page.
+  if (!isValidAreaCode(normalizePhone(number).slice(0, 3))) notFound();
+
   const result = await getLookup(number);
 
   if (result.type === "invalid") {
