@@ -70,8 +70,19 @@ That difference is the entire reason `get_area_summary()` exists.
 
 ## Watch
 
-- Egress and storage: Supabase dashboard → Organization → Usage. Turn on the
-  email alerts; they are the only early warning.
-- Storage grows daily via the FTC import. Around ~350 MB, prune old bulk
-  `source = 'ftc_dnc'` rows. Translations are hardcoded in `src/lib/i18n.ts`,
-  not in the database — dropping locales frees zero bytes.
+`.github/workflows/health.yml` asserts all five invariants above every day and
+fails when one breaks, which emails the repo owner. It exists because Supabase's
+usage alerts are dashboard-only — there is no endpoint for them anywhere in the
+Management API. Run it by hand any time with `gh workflow run health.yml`, and
+after any change to a route that reads the database.
+
+It also records a daily snapshot (`record_usage_snapshot()`) of storage and rows
+scanned. The rows/day threshold is provisional; retune it once a week of
+snapshots exists (`select * from usage_snapshots order by captured_at desc`).
+
+Supabase dashboard → Organization → Usage remains the source of truth for
+billed egress in bytes; nothing here can read that number.
+
+Storage grows daily via the FTC import. Around ~350 MB, prune old bulk
+`source = 'ftc_dnc'` rows. Translations are hardcoded in `src/lib/i18n.ts`, not
+in the database — dropping locales frees zero bytes.
