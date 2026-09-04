@@ -1,0 +1,87 @@
+name: Health and egress guardrails
+
+# The site has been taken down twice by an unbounded database read path. Those
+# regressions are invisible until egress has already been spent, so this asserts
+# the invariants in AGENTS.md directly, every day. A failed run emails the repo
+# owner — that is the alerting mechanism, since Supabase's usage alerts are
+# dashboard-only and have no Management API endpoint.
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # daily, an hour after the import
+  workflow_dispatch:
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    env:
+      SITE: https://www.canadial.com
+      SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      # Storage: 500 MB free-tier limit. Prune old ftc_dnc rows well before this.
+      MAX_DB_MB: '400'
+      # Rows scanned per day. Baseline after the Sept 2026 fixes is ~20M/day;
+      # 150M means something started scanning the whole table again.
+      MAX_TUP_PER_DAY: '150000000'
+      # Core pages + one entry per area code. Number pages must never be listed.
+      MAX_SITEMAP_URLS: '5000'
+    steps:
+      - name: Storage and scan volume
+        run: |
+          snap=$(curl -fsS -X POST \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' \
+            "$SUPABASE_URL/rest/v1/rpc/record_usage_snapshot")
+          echo "$snap"
+          db_mb=$(echo "$snap"  | python3 -c 'import sys,json;print(json.load(sys.stdin)["db_mb"])')
+          tup=$(echo "$snap"    | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_per_day"] or 0)')
+          echo "storage: ${db_mb} MB / ${MAX_DB_MB} MB"
+          echo "scanned: ${tup} rows/day / ${MAX_TUP_PER_DAY}"
+          python3 -c "import sys; sys.exit(0 if float('$db_mb') < float('$MAX_DB_MB') else 1)" \
+            || { echo "::error::Storage ${db_mb} MB is over ${MAX_DB_MB} MB. Prune old source='ftc_dnc' rows."; exit 1; }
+          python3 -c "import sys; sys.exit(0 if float('$tup') < float('$MAX_TUP_PER_DAY') else 1)" \
+            || { echo "::error::${tup} rows/day scanned. Something is reading the whole table again — see AGENTS.md."; exit 1; }
+
+      - name: Database is not publicly readable
+        run: |
+          for table in spam_reports organizations; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" \
+              "$SUPABASE_URL/rest/v1/$table?select=*&limit=1")
+            echo "anon -> $table: $code"
+            case "$code" in
+              401|403|404) ;;
+              *) echo "::error::anon key can read $table (HTTP $code). Anyone could page the table straight through PostgREST."; exit 1 ;;
+            esac
+          done
+
+      - name: Number pages are cached
+        run: |
+          url="$SITE/lookup/4164428848"
+          curl -s -o /dev/null "$url"                     # warm
+          hdr=$(curl -sI "$url")
+          cache=$(echo "$hdr" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-vercel-cache"{print $2}')
+          echo "x-vercel-cache: $cache"
+          case "$cache" in
+            HIT|PRERENDER|STALE|REVALIDATED) ;;
+            *) echo "::error::Number pages are not cached (x-vercel-cache: $cache). A route with revalidate but no generateStaticParams is fully dynamic — see AGENTS.md."; exit 1 ;;
+          esac
+          echo "$hdr" | tr -d '\r' | grep -qi 'cache-control:.*no-store' \
+            && { echo "::error::Number pages send no-store; every request will hit the database."; exit 1; } || true
+
+      - name: Crawl surface is bounded
+        run: |
+          n=$(curl -fsS "$SITE/sitemap.xml" | grep -c '<loc>')
+          echo "sitemap URLs: $n / $MAX_SITEMAP_URLS"
+          [ "$n" -lt "$MAX_SITEMAP_URLS" ] \
+            || { echo "::error::sitemap.xml lists $n URLs. Individual number pages must not be listed — that is what forced sharding and full-table scans."; exit 1; }
+
+      - name: Site is serving real data
+        run: |
+          curl -fsS "$SITE/" -o /tmp/home.html
+          grep -q 'Numbers tracked' /tmp/home.html \
+            || { echo "::error::Homepage is missing its stats block — the database read is failing."; exit 1; }
+          curl -fsS "$SITE/lookup/4164428848" -o /tmp/num.html
+          grep -qE 'Likely spam|Verified' /tmp/num.html \
+            || { echo "::error::Number page is not rendering lookup results."; exit 1; }

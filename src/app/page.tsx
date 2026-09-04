@@ -14,8 +14,12 @@ export const metadata: Metadata = {
   alternates: { canonical: "/", languages: HREFLANG_ALTERNATES },
 };
 
-// Refresh the recent-reports list periodically.
-export const revalidate = 300;
+// Hourly. get_site_stats() runs count(distinct) over the whole table — measured
+// at ~673k rows scanned per call — so a 5-minute window meant ~193M rows/day of
+// scanning for numbers that only move when the daily import lands. Freshness
+// doesn't depend on this window anyway: submitReport() calls revalidatePath("/"),
+// so a new community report shows up immediately.
+export const revalidate = 3600;
 
 // The homepage aggregates over the full spam_reports table (get_site_stats runs
 // several count(distinct) scans, ~9s on a 300k-row table). Give the render enough
