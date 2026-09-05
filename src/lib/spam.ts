@@ -1,6 +1,7 @@
 import "server-only";
 import { supabaseAdmin } from "./supabase";
 import { provinceForAreaCode, isCanadianAreaCode } from "./provinces";
+import { isValidAreaCode } from "./phone";
 
 // These aggregations power the sitemap, area-code pages, and the homepage grid.
 // They run server-side only and use the service-role client so the data is
@@ -94,15 +95,22 @@ export async function getAreaCodeCounts(): Promise<Record<string, number>> {
   } else if (data && typeof data === "object") {
     const counts: Record<string, number> = {};
     for (const [code, n] of Object.entries(data as Record<string, unknown>)) {
-      if (typeof n === "number" && n > 0) counts[code] = n;
+      if (typeof n === "number" && n > 0 && isValidAreaCode(code)) counts[code] = n;
     }
     if (Object.keys(counts).length > 0) return counts;
   }
 
+  // The fallback has to apply the same area-code validation as the RPC. It
+  // didn't, and because this function feeds the sitemap, one transient RPC
+  // failure during a build was enough to republish 67 impossible /area/<code>
+  // URLs (000, 111, 010...) to Google — silently undoing the filter added in
+  // the get_area_code_counts migration. Caught by a local build that happened
+  // to hit the fallback.
   const numbers = await getAllPhoneNumbers();
   const fallback: Record<string, number> = {};
   for (const n of numbers) {
     const code = n.slice(0, 3);
+    if (!isValidAreaCode(code)) continue;
     fallback[code] = (fallback[code] ?? 0) + 1;
   }
   return fallback;
@@ -303,7 +311,7 @@ function deriveSiteStats(
 // (e.g. "000", "010") that appear when a stats function doesn't filter to valid
 // 10-digit numbers.
 function isPlausibleAreaCode(code: string): boolean {
-  return /^[2-9]\d\d$/.test(code);
+  return isValidAreaCode(code);
 }
 
 function toNumberMap(

@@ -75,10 +75,21 @@ jobs:
 
       - name: Crawl surface is bounded
         run: |
-          n=$(curl -fsS "$SITE/sitemap.xml" | grep -c '<loc>')
+          curl -fsS "$SITE/sitemap.xml" -o /tmp/sitemap.xml
+          n=$(grep -c '<loc>' /tmp/sitemap.xml)
           echo "sitemap URLs: $n / $MAX_SITEMAP_URLS"
           [ "$n" -lt "$MAX_SITEMAP_URLS" ] \
             || { echo "::error::sitemap.xml lists $n URLs. Individual number pages must not be listed — that is what forced sharding and full-table scans."; exit 1; }
+          # A NANP area code never starts with 0 or 1. These reappear whenever a
+          # code path skips the area-code filter — it has happened once already,
+          # via the getAreaCodeCounts fallback.
+          bad=$(grep -oE '/area/[0-9]{3}' /tmp/sitemap.xml | sed 's|/area/||' | grep -cE '^[01]' || true)
+          echo "impossible area codes: $bad"
+          [ "$bad" -eq 0 ] \
+            || { echo "::error::sitemap.xml lists $bad impossible area codes (leading 0 or 1). Some path is skipping isValidAreaCode()."; exit 1; }
+          # /app is a parallel UI and is noindex; it must never be advertised here.
+          grep -q '/app' /tmp/sitemap.xml \
+            && { echo "::error::sitemap.xml contains /app URLs. The parallel UI must stay out of the index."; exit 1; } || true
 
       - name: Site is serving real data
         run: |

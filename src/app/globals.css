@@ -20,3 +20,18 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
+
+/* --- /app shell ---------------------------------------------------------
+   /app is a parallel, dark, minimal-chrome UI. It renders inside the shared
+   root layout, so it cannot remove that layout's <header> and <footer> from
+   its own subtree. :has() lets it opt out of them without touching a single
+   existing component or page. Where :has() is unsupported the site chrome
+   simply stays visible — degraded, never broken. */
+body:has([data-app-shell]) {
+  background: #0a0a0a;
+  color: #fafafa;
+}
+body:has([data-app-shell]) > header,
+body:has([data-app-shell]) > footer {
+  display: none;
+}
