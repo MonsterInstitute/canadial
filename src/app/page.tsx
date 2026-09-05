@@ -120,11 +120,9 @@ export default async function Home() {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4">
-      {/* Entry point to the parallel /app UI. Client-side dismissable; renders
-          nothing once dismissed. */}
-      <div className="pt-4">
-        <NewUiBanner />
-      </div>
+      {/* Entry point to the parallel /app UI. Hidden until an inline script
+          confirms it hasn't been dismissed — see the component. */}
+      <NewUiBanner />
 
       <section className="flex flex-col items-center py-16 text-center sm:py-24">
         <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-red-50 px-3 py-1 text-sm font-medium text-canada">
