@@ -21,11 +21,10 @@ jobs:
       ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       # Storage: 500 MB free-tier limit. Prune old ftc_dnc rows well before this.
       MAX_DB_MB: '400'
-      # Rows scanned per day. Provisional — retune once a week of daily
-      # snapshots exists. For scale: one get_site_stats() call scans ~673k rows,
-      # and the homepage regenerates hourly, so a healthy day is tens of
-      # millions. Reported as null (and skipped) when the gap since the previous
-      # snapshot is under 6h, since a short gap can't be extrapolated to a rate.
+      # Rows scanned per day. Measured steady state is ~7.2M/day (a quiet
+      # six-minute window, 2026-09-05), so this is ~20x headroom. For scale, one
+      # get_site_stats() call scans ~673k rows and the homepage regenerates
+      # hourly. Alerts only on two consecutive breaches — see below.
       MAX_TUP_PER_DAY: '150000000'
       # Core pages + one entry per area code. Number pages must never be listed.
       MAX_SITEMAP_URLS: '5000'
@@ -39,12 +38,23 @@ jobs:
           echo "$snap"
           db_mb=$(echo "$snap"  | python3 -c 'import sys,json;print(json.load(sys.stdin)["db_mb"])')
           tup=$(echo "$snap"    | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_per_day"] or 0)')
+          prev=$(echo "$snap"   | python3 -c 'import sys,json;print(json.load(sys.stdin)["prev_tup_per_day"] or 0)')
           echo "storage: ${db_mb} MB / ${MAX_DB_MB} MB"
-          echo "scanned: ${tup} rows/day / ${MAX_TUP_PER_DAY}"
+          echo "scanned: ${tup} rows/day (previous interval: ${prev}) / ${MAX_TUP_PER_DAY}"
           python3 -c "import sys; sys.exit(0 if float('$db_mb') < float('$MAX_DB_MB') else 1)" \
             || { echo "::error::Storage ${db_mb} MB is over ${MAX_DB_MB} MB. Prune old source='ftc_dnc' rows."; exit 1; }
-          python3 -c "import sys; sys.exit(0 if float('$tup') < float('$MAX_TUP_PER_DAY') else 1)" \
-            || { echo "::error::${tup} rows/day scanned. Something is reading the whole table again — see AGENTS.md."; exit 1; }
+          # Two consecutive breaches, not one. A migration, a batch of deploys or
+          # a VACUUM inflates a single interval — the first real run of this
+          # check reported 1.54 billion rows/day while the steady state minutes
+          # later was 7.2 million. A genuine full-table-scan regression persists
+          # across intervals; maintenance doesn't.
+          if python3 -c "import sys; sys.exit(0 if float('$tup') >= float('$MAX_TUP_PER_DAY') else 1)"; then
+            if python3 -c "import sys; sys.exit(0 if float('$prev') >= float('$MAX_TUP_PER_DAY') else 1)"; then
+              echo "::error::${tup} rows/day scanned, and ${prev} the interval before. Something is reading the whole table again — see AGENTS.md."
+              exit 1
+            fi
+            echo "::warning::${tup} rows/day scanned, over ${MAX_TUP_PER_DAY}. Previous interval was ${prev}, so this looks like maintenance. Alerting only if it repeats."
+          fi
 
       - name: Database is not publicly readable
         run: |
