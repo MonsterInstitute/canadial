@@ -114,7 +114,7 @@ export async function POST(req: Request) {
   // beside it — and could still appear in the area's "top numbers" — until the
   // next nightly refresh. Refresh just this code; it is a single-code pass.
   const { error: refreshErr } = await supabaseAdmin.rpc("refresh_area_summaries", {
-    p_code: areaCode,
+    p_codes: [areaCode],
   });
   if (refreshErr) {
     // The row is already hidden and every live read filters it out; only the
