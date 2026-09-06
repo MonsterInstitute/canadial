@@ -21,10 +21,11 @@ jobs:
       ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       # Storage: 500 MB free-tier limit. Prune old ftc_dnc rows well before this.
       MAX_DB_MB: '400'
-      # Rows scanned per day. Measured steady state is ~7.2M/day (a quiet
-      # six-minute window, 2026-09-05), so this is ~20x headroom. For scale, one
-      # get_site_stats() call scans ~673k rows and the homepage regenerates
-      # hourly. Alerts only on two consecutive breaches — see below.
+      # Rows scanned per day. Measured steady state is ~40M/day now that ~11.3k
+      # number pages are in the sitemap and being crawled (quiet-window sample,
+      # 2026-09-06); it was ~7M before. For scale, one get_site_stats() call
+      # scans ~673k rows and the homepage regenerates hourly. Alerting needs
+      # both the daily average and a live sample to breach — see below.
       MAX_TUP_PER_DAY: '150000000'
       # Core pages, ~723 area codes, and the ~11.3k number pages that are worth
       # indexing (2+ reports, or a verified organization). The bound exists to
@@ -48,17 +49,33 @@ jobs:
           echo "scanned: ${tup} rows/day (previous interval: ${prev}) / ${MAX_TUP_PER_DAY}"
           python3 -c "import sys; sys.exit(0 if float('$db_mb') < float('$MAX_DB_MB') else 1)" \
             || { echo "::error::Storage ${db_mb} MB is over ${MAX_DB_MB} MB. Prune old source='ftc_dnc' rows."; exit 1; }
-          # Two consecutive breaches, not one. A migration, a batch of deploys or
-          # a VACUUM inflates a single interval — the first real run of this
-          # check reported 1.54 billion rows/day while the steady state minutes
-          # later was 7.2 million. A genuine full-table-scan regression persists
-          # across intervals; maintenance doesn't.
+          # The daily average alone can't tell a regression from a busy day. It
+          # has false-alarmed twice: 1.54 billion rows/day once and 1.45 billion
+          # the next, both entirely migrations, builds, VACUUMs and a
+          # post-deploy crawl burst. Quiet-window samples minutes later were
+          # 7.2M and 40.6M.
+          #
+          # So alerting needs two things to be true at once: the 24h average is
+          # over budget (sustained cost) *and* it is still happening right now
+          # (a live sample). Maintenance and bursts fail the second test because
+          # they are over by the time this runs; a page path that scans the
+          # table fails both, because page renders never stop.
           if python3 -c "import sys; sys.exit(0 if float('$tup') >= float('$MAX_TUP_PER_DAY') else 1)"; then
-            if python3 -c "import sys; sys.exit(0 if float('$prev') >= float('$MAX_TUP_PER_DAY') else 1)"; then
-              echo "::error::${tup} rows/day scanned, and ${prev} the interval before. Something is reading the whole table again — see AGENTS.md."
+            echo "24h average is over budget; taking a live sample to see if it is still happening."
+            t1=$(echo "$snap" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_returned"])')
+            sleep 180
+            snap2=$(curl -fsS -X POST \
+              -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+              -H "Content-Type: application/json" -d '{}' \
+              "$SUPABASE_URL/rest/v1/rpc/record_usage_snapshot")
+            t2=$(echo "$snap2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_returned"])')
+            live=$(python3 -c "print(int(($t2 - $t1) * 86400 / 180))")
+            echo "live sample: ${live} rows/day"
+            if python3 -c "import sys; sys.exit(0 if float('$live') >= float('$MAX_TUP_PER_DAY') else 1)"; then
+              echo "::error::${tup} rows/day over 24h and ${live} rows/day right now. Something is reading the whole table — see AGENTS.md."
               exit 1
             fi
-            echo "::warning::${tup} rows/day scanned, over ${MAX_TUP_PER_DAY}. Previous interval was ${prev}, so this looks like maintenance. Alerting only if it repeats."
+            echo "::warning::${tup} rows/day over 24h, but only ${live} rows/day right now (previous interval ${prev}). Reads as maintenance or a crawl burst, not a regression."
           fi
 
       - name: Database is not publicly readable
