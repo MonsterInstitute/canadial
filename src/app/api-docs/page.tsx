@@ -22,10 +22,10 @@ const RESPONSE_JSON = `{
 }`;
 
 const CURL = `curl -H "Authorization: Bearer YOUR_API_KEY" \\
-  "https://canadial.com/api/v1/lookup?phone=4165551234"`;
+  "https://www.canadial.com/api/v1/lookup?phone=4165551234"`;
 
 const JS = `const res = await fetch(
-  "https://canadial.com/api/v1/lookup?phone=4165551234",
+  "https://www.canadial.com/api/v1/lookup?phone=4165551234",
   { headers: { Authorization: "Bearer YOUR_API_KEY" } }
 );
 const data = await res.json();
@@ -34,14 +34,14 @@ console.log(data.risk_level, data.risk_score);`;
 const PYTHON = `import requests
 
 res = requests.get(
-    "https://canadial.com/api/v1/lookup",
+    "https://www.canadial.com/api/v1/lookup",
     params={"phone": "4165551234"},
     headers={"Authorization": "Bearer YOUR_API_KEY"},
 )
 print(res.json()["risk_level"])`;
 
 const PHP = `<?php
-$ch = curl_init("https://canadial.com/api/v1/lookup?phone=4165551234");
+$ch = curl_init("https://www.canadial.com/api/v1/lookup?phone=4165551234");
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, ["Authorization: Bearer YOUR_API_KEY"]);
 $data = json_decode(curl_exec($ch), true);

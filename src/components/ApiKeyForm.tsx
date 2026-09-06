@@ -63,7 +63,7 @@ export default function ApiKeyForm() {
           <p className="font-medium">Try it:</p>
           <pre className="mt-1 overflow-x-auto rounded-lg bg-zinc-900 p-3 text-xs text-zinc-100">
 {`curl -H "Authorization: Bearer ${state.apiKey}" \\
-  "https://canadial.com/api/v1/lookup?phone=4165551234"`}
+  "https://www.canadial.com/api/v1/lookup?phone=4165551234"`}
           </pre>
         </div>
       </div>
