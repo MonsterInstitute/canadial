@@ -32,14 +32,23 @@ That difference is the entire reason `get_area_summary()` exists.
 
 ## Invariants
 
-1. **Aggregate in Postgres, never in the app.** Page code calls an RPC that
+1. **Per-render cost must not depend on how much data exists.** The area-code
+   summary every number page shows is materialized in `area_summaries`, one row
+   per code, refreshed nightly by the import workflow (and per-code by the
+   moderation endpoint). A render reads one row by primary key — ~2ms whatever
+   the code holds. Computing it live meant up to 11,000 rows per render on
+   toll-free codes: 210ms for 866, and 45,201 calls in a single crawl burst
+   after the sitemap grew. `get_area_summary_live()` still exists and is the
+   fallback for codes not yet materialized; it is not the read path.
+
+2. **Aggregate in Postgres, never in the app.** Page code calls an RPC that
    returns the answer (`get_site_stats`, `get_area_code_counts`,
    `get_area_summary`). Never page raw rows in to reduce them in TypeScript —
    that is what `getAllPhoneNumbers()` did, and it is why the sitemap alone
    could burn the monthly budget. Every RPC path keeps a scan fallback so a
    missing migration degrades instead of breaking.
 
-2. **Writing `revalidate` does not mean the page is cached.** A dynamic route
+3. **Writing `revalidate` does not mean the page is cached.** A dynamic route
    also needs `generateStaticParams` (returning `[]` is enough) or Next treats
    it as fully dynamic and silently ignores `revalidate`. `/lookup/[number]`
    shipped that way and re-queried the database on *every single request*.
@@ -51,20 +60,20 @@ That difference is the entire reason `get_area_summary()` exists.
    # `cache-control: private, no-cache, no-store`, means it is NOT cached.
    ```
 
-3. **No public database access.** `spam_reports` and `organizations` grant
+4. **No public database access.** `spam_reports` and `organizations` grant
    nothing to `anon`/`authenticated`; all reads and writes go through
    `supabaseAdmin` (service role) in server components and server actions. An
    open anon policy lets anyone page the tables straight through PostgREST,
    bypassing every cache and limit here. The anon client in `src/lib/supabase.ts`
    is exported but must stay unused.
 
-4. **Keep the crawl surface bounded.** `sitemap.xml` lists core pages and area
+5. **Keep the crawl surface bounded.** `sitemap.xml` lists core pages and area
    codes (~790 URLs) — never individual number pages. The ~336k number pages
    are reachable through area-page links; that is enough. Listing them once
    meant ~3.3M URLs across 11 locales, which forced the sitemap to shard, and
    every shard re-scanned the whole table.
 
-5. **Don't remove the daily import.** A free-tier project pauses after 7 days
+6. **Don't remove the daily import.** A free-tier project pauses after 7 days
    of inactivity. Reads are now almost entirely cache-served, so
    `.github/workflows/daily-import.yml` doubles as the keep-alive.
 
@@ -107,9 +116,19 @@ TypeScript read paths and three RPCs (`get_site_stats`, `get_area_code_counts`,
 `get_area_summary`) do. Miss one and a hidden comment vanishes from the page
 while still inflating the counts printed beside it.
 
+## Daily cycle
+
+`.github/workflows/daily-import.yml` runs at 08:00 UTC: FTC import, ReverseCanada
+import, then `refresh_area_summaries()`. The refresh must stay last — it
+summarises what the importers just wrote — and the step fails loudly if it
+returns zero, because a silent failure would leave every number page serving
+stale area context indefinitely.
+
+This workflow is also the free tier's keep-alive (see invariant 6).
+
 ## Watch
 
-`.github/workflows/health.yml` asserts all five invariants above every day and
+`.github/workflows/health.yml` asserts these invariants every day and
 fails when one breaks, which emails the repo owner. It exists because Supabase's
 usage alerts are dashboard-only — there is no endpoint for them anywhere in the
 Management API. Run it by hand any time with `gh workflow run health.yml`, and

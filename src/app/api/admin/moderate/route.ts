@@ -106,12 +106,31 @@ export async function POST(req: Request) {
     return json(500, { error: "Could not update that report." });
   }
 
+  const phone = existing.phone_number as string;
+  const areaCode = phone.slice(0, 3);
+
+  // area_summaries is a materialized rollup refreshed daily, so without this a
+  // hidden report would keep inflating the counts and type breakdown printed
+  // beside it — and could still appear in the area's "top numbers" — until the
+  // next nightly refresh. Refresh just this code; it is a single-code pass.
+  const { error: refreshErr } = await supabaseAdmin.rpc("refresh_area_summaries", {
+    p_code: areaCode,
+  });
+  if (refreshErr) {
+    // The row is already hidden and every live read filters it out; only the
+    // rollup is stale, and tonight's refresh fixes that. Worth logging, not
+    // worth failing the moderation action.
+    console.error(
+      `moderation: refresh_area_summaries(${areaCode}) failed:`,
+      refreshErr.message
+    );
+  }
+
   // The number's own page, its area code, and the homepage lists all show this
   // report; drop their cached copies so the change is visible immediately
   // rather than at the next revalidate (a day for number pages).
-  const phone = existing.phone_number as string;
   revalidatePath(`/lookup/${phone}`);
-  revalidatePath(`/area/${phone.slice(0, 3)}`);
+  revalidatePath(`/area/${areaCode}`);
   revalidatePath("/");
 
   console.log(

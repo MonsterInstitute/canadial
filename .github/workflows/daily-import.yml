@@ -30,3 +30,23 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python scripts/reversecanada_daily.py
+
+      # Rebuild the per-area-code rollup that every number page reads. It has to
+      # run after the importers, because it summarises what they just inserted.
+      # Without it the site would serve yesterday's area context indefinitely.
+      # One pass over the table, ~667 codes; this is the only full aggregation
+      # in the daily cycle.
+      - name: Refresh area summaries
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          codes=$(curl -fsS -X POST \
+            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+            -H "Content-Type: application/json" -d '{}' \
+            "$SUPABASE_URL/rest/v1/rpc/refresh_area_summaries")
+          echo "area codes refreshed: $codes"
+          # A zero here means the rollup did not update and every number page
+          # would keep serving stale area context, so fail loudly.
+          [ "$codes" -gt 0 ] 2>/dev/null \
+            || { echo "::error::refresh_area_summaries returned '$codes'"; exit 1; }
