@@ -26,8 +26,13 @@ jobs:
       # get_site_stats() call scans ~673k rows and the homepage regenerates
       # hourly. Alerts only on two consecutive breaches — see below.
       MAX_TUP_PER_DAY: '150000000'
-      # Core pages + one entry per area code. Number pages must never be listed.
-      MAX_SITEMAP_URLS: '5000'
+      # Core pages, ~723 area codes, and the ~11.3k number pages that are worth
+      # indexing (2+ reports, or a verified organization). The bound exists to
+      # catch a wholesale relisting of all ~307k number pages — that is what
+      # forced sitemap sharding and full-table scans — not to police growth, so
+      # it leaves plenty of room as more numbers pick up a second report.
+      # Google's own ceiling is 50,000 URLs per sitemap file.
+      MAX_SITEMAP_URLS: '30000'
     steps:
       - name: Storage and scan volume
         run: |

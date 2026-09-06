@@ -253,6 +253,30 @@ export async function getAreaSummary(
   };
 }
 
+// The number pages worth listing in the sitemap: numbers reported more than
+// once, plus every verified organization. See the get_indexable_numbers()
+// migration for why the ~307k single-report numbers are deliberately left out —
+// they share 20 boilerplate comment texts between them and Google already
+// declined to index them once.
+//
+// One index-only query per sitemap build (daily), ~150 KB.
+export async function getIndexableNumbers(minReports = 2): Promise<string[]> {
+  const { data, error } = await supabaseAdmin.rpc("get_indexable_numbers", {
+    p_min_reports: minReports,
+  });
+  if (error) {
+    // Degrade to a sitemap of core and area-code pages rather than failing the
+    // build: an incomplete sitemap costs some crawling, a broken one costs all
+    // of it.
+    console.error("get_indexable_numbers RPC failed:", error.message);
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+  return (data as unknown[]).filter(
+    (n): n is string => typeof n === "string" && n.length === 10
+  );
+}
+
 export type SiteStats = {
   totalNumbers: number;
   totalReports: number;

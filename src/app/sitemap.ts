@@ -1,5 +1,5 @@
 import type { MetadataRoute } from "next";
-import { getAreaCodeCounts } from "@/lib/spam";
+import { getAreaCodeCounts, getIndexableNumbers } from "@/lib/spam";
 import { getReportableMonths } from "@/lib/reports";
 import { LOCALES } from "@/lib/i18n";
 import { SITE_URL } from "@/lib/config";
@@ -9,12 +9,21 @@ export const revalidate = 86400;
 
 const LANGS = LOCALES.filter((l) => l.code !== "en");
 
-// A single sitemap: core pages plus one entry per area code (English only —
-// translated lookup/area pages were dropped, they were never indexed and
-// were the entire reason this used to be split into ~330 shards that each
-// re-scanned the whole spam_reports table). getAreaCodeCounts() is a single
-// Postgres aggregation, not a table scan, so this whole file is now cheap
-// regardless of how many numbers the database holds.
+// A single sitemap: core pages, one entry per area code, and the number pages
+// that carry something specific enough to be worth indexing — reported more
+// than once, or a verified organization (~11.3k of ~307k).
+//
+// Both database reads are single Postgres aggregations rather than table
+// scans, so this stays cheap however large spam_reports grows. That is the
+// whole point: this file once sharded into ~330 sitemaps that each re-scanned
+// the table, which is what exhausted the egress quota.
+//
+// The ~296k single-report numbers are left out on purpose. They are not
+// excluded to save egress — a number page costs 1,473 bytes to render, so all
+// of them would fit — but because 281k FTC rows share 20 boilerplate comment
+// texts, and Google already crawled those pages when the sitemap listed 3.3M
+// URLs and chose not to index them. Listing them spends crawl budget to be
+// ignored. Raising the bar is a content problem, not a sitemap one.
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   const entries: MetadataRoute.Sitemap = [
@@ -85,6 +94,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       lastModified: now,
       changeFrequency: "daily",
       priority: 0.8,
+    });
+  }
+
+  // Number pages worth indexing. Lower priority than area pages: these are the
+  // long tail, and area pages are the hubs that link to them.
+  const numbers = await getIndexableNumbers();
+  for (const n of numbers) {
+    entries.push({
+      url: `${SITE_URL}/lookup/${n}`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.6,
     });
   }
 
