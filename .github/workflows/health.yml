@@ -94,16 +94,31 @@ jobs:
       - name: Number pages are cached
         run: |
           url="$SITE/lookup/4164428848"
-          curl -s -o /dev/null "$url"                     # warm
-          hdr=$(curl -sI "$url")
-          cache=$(echo "$hdr" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-vercel-cache"{print $2}')
-          echo "x-vercel-cache: $cache"
+          hdr=$(curl -sI "$url" | tr -d '\r')
+          cc=$(echo "$hdr" | awk -F': ' 'tolower($1)=="cache-control"{print $2}')
+          echo "cache-control: $cc"
+          # The deterministic signal. A route with `revalidate` but no
+          # generateStaticParams is fully dynamic and Next sends no-store; an
+          # ISR route sends must-revalidate. This does not depend on whether a
+          # particular edge node happens to hold the page yet.
+          case "$cc" in
+            *no-store*) echo "::error::Number pages send no-store; every request re-renders and re-queries. A dynamic route needs generateStaticParams for revalidate to apply — see AGENTS.md."; exit 1 ;;
+          esac
+          # x-vercel-cache is a useful confirmation but inherently racy: right
+          # after a deploy the cache is cold, and the warming request and the
+          # check can land on different edge nodes. It false-failed once that
+          # way. Retry, then warn rather than fail — the assertion above already
+          # catches the regression this step exists for.
+          for i in 1 2 3 4 5; do
+            cache=$(curl -sI "$url" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-vercel-cache"{print $2}')
+            echo "attempt $i: x-vercel-cache=$cache"
+            case "$cache" in HIT|PRERENDER|STALE|REVALIDATED) break ;; esac
+            sleep 5
+          done
           case "$cache" in
             HIT|PRERENDER|STALE|REVALIDATED) ;;
-            *) echo "::error::Number pages are not cached (x-vercel-cache: $cache). A route with revalidate but no generateStaticParams is fully dynamic — see AGENTS.md."; exit 1 ;;
+            *) echo "::warning::Number page still shows x-vercel-cache=$cache after 5 tries. Expected right after a deploy; investigate if it persists." ;;
           esac
-          echo "$hdr" | tr -d '\r' | grep -qi 'cache-control:.*no-store' \
-            && { echo "::error::Number pages send no-store; every request will hit the database."; exit 1; } || true
 
       - name: Crawl surface is bounded
         run: |
