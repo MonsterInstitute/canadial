@@ -11,6 +11,10 @@ import { SITE_NAME, SITE_URL } from "@/lib/config";
 // via the /[lang]/reports index and the sitemap, without prerendering 11
 // locales × every month (each a full-table scan) at build time.
 export const revalidate = 604800; // weekly — matches src/app/reports/[year]/[month]/page.tsx
+// A month's report aggregates every report in it (and took >60s in local
+// builds against a slow database), so it keeps the long budget rather than
+// the 30s default in vercel.json.
+export const maxDuration = 300;
 
 // Returning [] (rather than omitting this) is what makes the route ISR instead
 // of fully dynamic — see the note in src/app/lookup/[number]/page.tsx. Nothing

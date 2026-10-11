@@ -8,6 +8,10 @@ on:
 jobs:
   import:
     runs-on: ubuntu-latest
+    env:
+      # The importers append every number they write here; the last step
+      # revalidates those numbers' cached pages.
+      TOUCHED_NUMBERS_FILE: touched_numbers.txt
     steps:
       - uses: actions/checkout@v4
 
@@ -40,3 +44,14 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python scripts/refresh_area_summaries.py
+
+      # Number pages are ISR-cached for a week, and nothing above goes through
+      # the app, so without this a newly reported number keeps its cached page
+      # until the window lapses. Runs even if an earlier step failed, so a
+      # partial import still shows up. Warns and skips if the secret is unset.
+      - name: Revalidate changed pages
+        if: ${{ !cancelled() }}
+        env:
+          SITE: https://www.canadial.com
+          REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
+        run: python scripts/revalidate_pages.py

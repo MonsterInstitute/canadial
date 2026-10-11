@@ -31,6 +31,15 @@ def normalize(p):
     return d if len(d) == 10 else None
 
 
+def record_touched(numbers):
+    """Append numbers to $TOUCHED_NUMBERS_FILE for scripts/revalidate_pages.py,
+    which refreshes their cached pages after the import. No-op when unset."""
+    path = os.environ.get('TOUCHED_NUMBERS_FILE')
+    if path and numbers:
+        with open(path, 'a') as f:
+            f.writelines(f"{n}\n" for n in numbers)
+
+
 # 1. Scrape the homepage for /lookup/XXXXXXXXXX/ links.
 print(f"Fetching {HOMEPAGE} ...")
 resp = requests.get(HOMEPAGE, headers=HEADERS, timeout=30)
@@ -108,6 +117,7 @@ for i in range(0, len(batch), 500):
             .execute()
         )
         sent += len(chunk)
+        record_touched([rec['phone_number'] for rec in chunk])
     except Exception as e:
         print(f"Batch insert failed, retrying row by row: {e}")
         for rec in chunk:
@@ -119,6 +129,7 @@ for i in range(0, len(batch), 500):
                     .execute()
                 )
                 sent += 1
+                record_touched([rec['phone_number']])
             except Exception:
                 pass
 saved = sent

@@ -7,16 +7,12 @@ import { isValidAreaCode, cleanComment } from "@/lib/phone";
 import { SITE_URL } from "@/lib/config";
 import ShareButton from "@/components/app/ShareButton";
 
-// One cached page per number, regenerated daily.
-export const revalidate = 86400;
-
-// Required for `revalidate` to apply at all — without it Next treats a dynamic
-// route as fully dynamic and re-renders on every request, silently ignoring
-// the cache. See AGENTS.md; /lookup/[number] shipped that way for months.
-// Returning [] prerenders nothing at build time.
-export function generateStaticParams() {
-  return [];
-}
+// Rendered per request, NOT cached per number. This is a noindexed duplicate
+// of /lookup/[number] (see ../../layout.tsx) reached only from the /app search
+// box, so a per-number ISR entry was almost never read twice: it was an ISR
+// write for every number anyone looked up here, on top of the /lookup copy.
+// A render is two small indexed reads (lookupPhone), bounded per AGENTS.md.
+export const dynamic = "force-dynamic";
 
 // generateMetadata and the render both need the lookup; cache() collapses them
 // into one database call per request.

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { cache } from "react";
 import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
 import { cleanComment, isFtcSource, describeFtcReport, isValidAreaCode } from "@/lib/phone";
@@ -16,9 +16,13 @@ import { SITE_NAME, SITE_URL } from "@/lib/config";
 import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 
-// Cache each number page and regenerate daily — keeps crawls (and egress
-// across ~336k number pages) cheap.
-export const revalidate = 86400;
+// Cache each number page and regenerate weekly — keeps crawls (and egress
+// across ~336k number pages) cheap. Weekly, not daily: the page only changes
+// when a report lands, and every writer of reports revalidates this page on
+// the spot: submitReport() in ./actions.ts, the admin moderation route, and
+// the daily import (via /api/admin/revalidate, scripts/revalidate_pages.py).
+// Only the area-code context below it can lag by up to a week.
+export const revalidate = 604800;
 
 // Required for `revalidate` to actually apply. Without a generateStaticParams
 // export, Next treats this route as fully dynamic and re-renders it on every
@@ -37,6 +41,37 @@ export function generateStaticParams() {
 const getLookup = cache(lookupPhone);
 
 type Props = { params: Promise<{ number: string }> };
+
+// The one URL a number's page lives at, or null when the segment is not a
+// real number. Every spelling of the same number ("416-555-1234",
+// "+14165551234", "(416) 555 1234") used to render and cache its own ISR copy,
+// and junk with a plausible area code rendered a 200 "invalid number" page.
+// Now non-canonical spellings 308 to the canonical URL and junk is a 404.
+// Stricter than normalizePhone(), which keeps the LAST ten digits of anything
+// longer: here only 10 digits, or 11 with a leading 1, are a number.
+function canonicalNumber(raw: string): string | null {
+  let s = raw;
+  try {
+    s = decodeURIComponent(raw);
+  } catch {
+    // Malformed escape: fall through with the raw segment.
+  }
+  const digits = s.replace(/\D/g, "");
+  if (!(digits.length === 10 || (digits.length === 11 && digits.startsWith("1")))) {
+    return null;
+  }
+  const n = normalizePhone(digits);
+  return isValidAreaCode(n.slice(0, 3)) ? n : null;
+}
+
+// Both generateMetadata and the page call this first, so neither does any
+// database work for a URL that is about to 404 or redirect.
+function canonicalOrExit(raw: string): string {
+  const canonical = canonicalNumber(raw);
+  if (!canonical) notFound();
+  if (canonical !== raw) permanentRedirect(`/lookup/${canonical}`);
+  return canonical;
+}
 
 type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;
 
@@ -169,16 +204,8 @@ function buildJsonLd(number: string, pretty: string, result: LookupResult) {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { number } = await params;
-  const pretty = formatPhone(number);
-  const normalized = normalizePhone(number);
-
-  if (normalized.length !== 10) {
-    return {
-      // `absolute` bypasses the root "%s | Canadial" template.
-      title: { absolute: `${pretty} — Canadian Phone Lookup | ${SITE_NAME}` },
-      description: `${pretty} is not a valid 10-digit Canadian phone number.`,
-    };
-  }
+  const normalized = canonicalOrExit(number);
+  const pretty = formatPhone(normalized);
 
   // Build a unique-per-number title and description from real data, varied by
   // whether the number is spam, verified, or unknown.
@@ -716,12 +743,11 @@ function FaqSection({ faq }: { faq: { q: string; a: string }[] }) {
 
 export default async function LookupPage({ params }: Props) {
   const { number } = await params;
-  const pretty = formatPhone(number);
-
   // 404 rather than render a page for a number that cannot exist. The imported
   // datasets contain junk like 1111111111 and 0000000000, and each one was
-  // otherwise getting a real, indexable page.
-  if (!isValidAreaCode(normalizePhone(number).slice(0, 3))) notFound();
+  // otherwise getting a real, indexable page. Other spellings redirect.
+  canonicalOrExit(number);
+  const pretty = formatPhone(number);
 
   const result = await getLookup(number);
 

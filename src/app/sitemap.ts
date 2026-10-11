@@ -6,6 +6,9 @@ import { SITE_URL } from "@/lib/config";
 
 // Revalidate daily.
 export const revalidate = 86400;
+// The area-code count can fall back to a full scan when its RPC times out, so
+// this keeps the long budget rather than the 30s default in vercel.json.
+export const maxDuration = 300;
 
 const LANGS = LOCALES.filter((l) => l.code !== "en");
 
@@ -24,17 +27,19 @@ const LANGS = LOCALES.filter((l) => l.code !== "en");
 // texts, and Google already crawled those pages when the sitemap listed 3.3M
 // URLs and chose not to index them. Listing them spends crawl budget to be
 // ignored. Raising the bar is a content problem, not a sitemap one.
+// No lastModified on any entry. Every one used to say "now", i.e. the time
+// the sitemap was last regenerated, which tells a crawler nothing and teaches
+// it to ignore the field. None of these reads carries a real per-URL date,
+// and an absent lastmod is better than a false one.
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const now = new Date();
   const entries: MetadataRoute.Sitemap = [
-    { url: SITE_URL, lastModified: now, changeFrequency: "daily", priority: 1 },
+    { url: SITE_URL, changeFrequency: "daily", priority: 1 },
   ];
 
   // Language landing pages.
   for (const l of LANGS) {
     entries.push({
       url: `${SITE_URL}${l.path}`,
-      lastModified: now,
       changeFrequency: "weekly",
       priority: 0.9,
     });
@@ -44,7 +49,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   for (const path of ["/api-docs", "/pricing", "/api-keys"]) {
     entries.push({
       url: `${SITE_URL}${path}`,
-      lastModified: now,
       changeFrequency: "monthly",
       priority: 0.6,
     });
@@ -56,14 +60,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   for (const root of reportRoots) {
     entries.push({
       url: `${SITE_URL}${root}/reports`,
-      lastModified: now,
       changeFrequency: "weekly",
       priority: 0.7,
     });
     for (const { year, month } of reportMonths) {
       entries.push({
         url: `${SITE_URL}${root}/reports/${year}/${String(month).padStart(2, "0")}`,
-        lastModified: now,
         changeFrequency: "monthly",
         priority: root === "" ? 0.8 : 0.6,
       });
@@ -73,14 +75,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // Know Your Rights — English plus one per non-English locale.
   entries.push({
     url: `${SITE_URL}/rights`,
-    lastModified: now,
     changeFrequency: "monthly",
     priority: 0.7,
   });
   for (const l of LANGS) {
     entries.push({
       url: `${SITE_URL}${l.path}/rights`,
-      lastModified: now,
       changeFrequency: "monthly",
       priority: 0.6,
     });
@@ -91,7 +91,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   for (const code of Object.keys(areaCodeCounts)) {
     entries.push({
       url: `${SITE_URL}/area/${code}`,
-      lastModified: now,
       changeFrequency: "daily",
       priority: 0.8,
     });
@@ -103,7 +102,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   for (const n of numbers) {
     entries.push({
       url: `${SITE_URL}/lookup/${n}`,
-      lastModified: now,
       changeFrequency: "weekly",
       priority: 0.6,
     });

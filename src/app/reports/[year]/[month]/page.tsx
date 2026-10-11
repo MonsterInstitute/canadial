@@ -6,6 +6,10 @@ import { formatPhone } from "@/lib/phone";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 
 export const revalidate = 604800; // weekly
+// A month's report aggregates every report in it (and took >60s in local
+// builds against a slow database), so it keeps the long budget rather than
+// the 30s default in vercel.json.
+export const maxDuration = 300;
 
 type Props = { params: Promise<{ year: string; month: string }> };
 

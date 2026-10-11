@@ -119,10 +119,16 @@ while still inflating the counts printed beside it.
 ## Daily cycle
 
 `.github/workflows/daily-import.yml` runs at 08:00 UTC: FTC import, ReverseCanada
-import, then `refresh_area_summaries()`. The refresh must stay last — it
+import, then `refresh_area_summaries()`. The refresh must stay after the importers — it
 summarises what the importers just wrote — and the step fails loudly if it
 returns zero, because a silent failure would leave every number page serving
 stale area context indefinitely.
+
+A final step (`scripts/revalidate_pages.py`) posts the number, area-code and
+reports pages the import touched to `/api/admin/revalidate`, so a newly
+reported number doesn't keep its week-old cached page. It needs the
+`REVALIDATE_SECRET` GitHub secret to match the Vercel env var of the same name;
+without it the step warns and skips.
 
 This workflow is also the free tier's keep-alive (see invariant 6).
 
