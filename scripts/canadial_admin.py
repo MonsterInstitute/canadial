@@ -12,6 +12,8 @@ import urllib.request
 SITE = os.environ.get("SITE", "https://www.canadial.com").rstrip("/")
 TOKEN = os.environ.get("ADMIN_TOKEN", "")
 TIMEOUT = 300
+# Cloudflare rejects urllib's default "Python-urllib" user agent (error 1010).
+USER_AGENT = "canadial-jobs/1.0 (+https://github.com/MonsterInstitute/canadial)"
 
 
 def post(path, payload=None):
@@ -20,7 +22,7 @@ def post(path, payload=None):
     req = urllib.request.Request(
         f"{SITE}{path}",
         data=json.dumps(payload or {}).encode(),
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
     try:

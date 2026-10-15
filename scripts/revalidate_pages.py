@@ -73,6 +73,8 @@ def post(paths):
         headers={
             "Authorization": f"Bearer {SECRET}",
             "Content-Type": "application/json",
+            # Cloudflare rejects urllib's default user agent (error 1010).
+            "User-Agent": "canadial-jobs/1.0 (+https://github.com/MonsterInstitute/canadial)",
         },
         method="POST",
     )
