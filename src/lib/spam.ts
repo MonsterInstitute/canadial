@@ -1,5 +1,6 @@
 import "server-only";
 import { supabaseAdmin } from "./supabase";
+import { first } from "./d1";
 import { provinceForAreaCode, isCanadianAreaCode } from "./provinces";
 import { isValidAreaCode } from "./phone";
 
@@ -207,25 +208,6 @@ type AreaSummaryRow = {
   latest_comment?: unknown;
 };
 
-// Derive the summary from a full getNumbersForAreaCode() scan. Used only when
-// the RPC is unavailable, so a missing migration degrades to the old (heavier)
-// behaviour instead of an empty page.
-function summarizeAreaNumbers(numbers: AreaNumber[], limit: number): AreaSummary {
-  const typeCounts: Record<string, number> = {};
-  for (const n of numbers) {
-    const t = n.most_common_type || "Other";
-    typeCounts[t] = (typeCounts[t] ?? 0) + 1;
-  }
-  return {
-    numberCount: numbers.length,
-    reportTotal: numbers.reduce((s, n) => s + n.report_count, 0),
-    topType:
-      Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
-    typeCounts,
-    topNumbers: numbers.slice(0, limit),
-  };
-}
-
 // `limit` caps only the returned number list; the counts are exact over the
 // whole area code either way. Number pages want a handful of related numbers,
 // area pages want a page's worth.
@@ -233,15 +215,13 @@ export async function getAreaSummary(
   code: string,
   limit = 6
 ): Promise<AreaSummary> {
-  const { data, error } = await supabaseAdmin.rpc("get_area_summary", {
-    p_code: code,
-    p_limit: limit,
-  });
-  if (error) {
-    if (!isMissingFunction(error)) throw dbError(`get_area_summary(${code})`, error);
-    console.error(`get_area_summary RPC missing, falling back to scan for ${code}`);
-    return summarizeAreaNumbers(await getNumbersForAreaCode(code), limit);
-  }
+  // One row by primary key from the materialized area_summaries table (the
+  // daily job refreshes it). No row means the code has no reported numbers.
+  const row = await first<{ payload: string }>(
+    "SELECT payload FROM area_summaries WHERE code = ?",
+    Number(code)
+  );
+  const data: unknown = row ? JSON.parse(row.payload) : {};
 
   const d = (data ?? {}) as Record<string, unknown>;
   const rows = Array.isArray(d.top_numbers) ? (d.top_numbers as AreaSummaryRow[]) : [];
@@ -250,7 +230,7 @@ export async function getAreaSummary(
     reportTotal: typeof d.report_total === "number" ? d.report_total : 0,
     topType: typeof d.top_type === "string" ? d.top_type : null,
     typeCounts: toNumberMap(d.type_counts),
-    topNumbers: rows.map((r) => ({
+    topNumbers: rows.slice(0, limit).map((r) => ({
       phone_number: String(r.phone_number ?? ""),
       report_count: typeof r.report_count === "number" ? r.report_count : 0,
       // spam_count isn't part of the summary — the number pages never read it.

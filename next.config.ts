@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
 const nextConfig: NextConfig = {
   // Translated per-number/per-area-code pages were removed (they were never
@@ -23,3 +24,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+// Gives `next dev` the Cloudflare bindings (D1) through getCloudflareContext().
+initOpenNextCloudflareForDev();
