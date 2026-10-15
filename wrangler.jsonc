@@ -23,7 +23,11 @@
     // OpenNext tag cache for revalidatePath(); kept apart from app data.
     { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-tags", "database_id": "293d8ecd-c499-4061-b4cf-deb63a541b03" }
   ],
-  "r2_buckets": [{ "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-opennext-cache" }],
+  "r2_buckets": [
+    { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-opennext-cache" },
+    // Raw FTC files (ftc/raw/...) and data exports. Private; never served.
+    { "binding": "FTC_DATA", "bucket_name": "canadial-data" }
+  ],
   "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
   "env": {
