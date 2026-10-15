@@ -1,132 +1,101 @@
-"""Daily importer for the US FTC Do Not Call complaint dataset.
+"""Daily importer for the US FTC Do Not Call complaint data.
 
-Fetches yesterday's public FTC complaint CSV, classifies each number, and
-inserts new spam reports. Credentials come from the environment (set as GitHub
-Actions secrets), not a local .env file.
+Reads the FTC DNC Reported Calls API (api.ftc.gov), not the daily CSV files:
+ftc.gov answers scripted clients with a 1.3 KB HTML "404" page even when a
+file exists, so the CSV importer silently fetched nothing on most days from
+August to October 2026. The API answers normally (FTC_API_KEY, an
+api.data.gov key; 20,000 requests/hour).
+
+Window: complaints created in the last LOOKBACK_DAYS days. A day's complaints
+are uploaded around noon Eastern the next weekday, so at 08:00 UTC yesterday
+is often still empty; re-reading recent days is harmless because rows are
+deduplicated on (phone, comment, source).
+
+Row shape is unchanged from the CSV importer: one report per number per
+subject, "Reported to FTC Do Not Call registry — <subject>". That model drops
+complaint counts; Phase 2 replaces it with per-number aggregates.
 """
 
-import requests, csv, re, io, os
-from datetime import datetime, timedelta
-from supabase import create_client
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
 
-SUPABASE_URL = os.environ.get('NEXT_PUBLIC_SUPABASE_URL')
-SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from canadial_admin import import_rows  # noqa: E402
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print('Missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in environment')
-    raise SystemExit(1)
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-HEADERS = {'User-Agent': 'Mozilla/5.0'}
+API = "https://api.ftc.gov/v0/dnc-complaints"
+KEY = os.environ.get("FTC_API_KEY", "")
+LOOKBACK_DAYS = 4
+PAGE = 50  # the API's maximum
 
 
 def normalize(p):
-    d = re.sub(r'\D', '', str(p or ''))
-    if len(d) == 11 and d[0] == '1':
+    d = re.sub(r"\D", "", str(p or ""))
+    if len(d) == 11 and d[0] == "1":
         d = d[1:]
     return d if len(d) == 10 else None
 
 
-def record_touched(numbers):
-    """Append numbers to $TOUCHED_NUMBERS_FILE for scripts/revalidate_pages.py,
-    which refreshes their cached pages after the import. No-op when unset."""
-    path = os.environ.get('TOUCHED_NUMBERS_FILE')
-    if path and numbers:
-        with open(path, 'a') as f:
-            f.writelines(f"{n}\n" for n in numbers)
-
-
 def classify(s, r):
-    s = (s or '').lower()
-    if any(w in s for w in ['tax', 'irs', 'government', 'warrant', 'arrest', 'social security', 'immigration', 'imposter']):
-        return 'Scam'
-    if any(w in s for w in ['debt', 'credit', 'loan', 'mortgage']):
-        return 'Debt Collector'
-    if r == 'Y':
-        return 'Robocall'
-    if any(w in s for w in ['solar', 'insurance', 'warranty', 'medical', 'energy']):
-        return 'Telemarketer'
-    return 'Other'
+    s = (s or "").lower()
+    if any(w in s for w in ["tax", "irs", "government", "warrant", "arrest", "social security", "immigration", "imposter"]):
+        return "Scam"
+    if any(w in s for w in ["debt", "credit", "loan", "mortgage"]):
+        return "Debt Collector"
+    if r == "Y":
+        return "Robocall"
+    if any(w in s for w in ["solar", "insurance", "warranty", "medical", "energy"]):
+        return "Telemarketer"
+    return "Other"
 
 
-# Get yesterday's file
-yesterday = datetime.now() - timedelta(days=1)
-date_str = yesterday.strftime('%Y-%m-%d')
-url = f"https://www.ftc.gov/sites/default/files/DNC_Complaint_Numbers_{date_str}.csv"
+def fetch_day(day):
+    out, offset = [], 0
+    while True:
+        q = urllib.parse.urlencode({"created_date": f'"{day}"', "items_per_page": PAGE, "offset": offset})
+        req = urllib.request.Request(f"{API}?{q}", headers={"X-Api-Key": KEY})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.load(r).get("data") or []
+        out += [d.get("attributes", {}) for d in data]
+        if len(data) < PAGE:
+            return out
+        offset += PAGE
 
-print(f"Fetching FTC data for {date_str}...")
-r = requests.get(url, headers=HEADERS, timeout=30)
-if r.status_code != 200:
-    # The FTC posts a file each weekday; weekend complaints land in Monday's
-    # file. So a missing Saturday/Sunday file is expected, but a missing weekday
-    # file is a failure. This used to exit 0 on any status, and the import
-    # silently fetched nothing on most days from August to October 2026:
-    # ftc.gov answers scripted clients with a 1.3 KB HTML "404" page even when
-    # the file exists. Federal holidays will also fail here; that is a rare,
-    # visible false alarm rather than a silent gap.
-    if yesterday.weekday() >= 5:
-        print(f"No file for {date_str} (weekend, expected): HTTP {r.status_code}")
-        raise SystemExit(0)
-    print(f"::error::FTC file for {date_str} not available: HTTP {r.status_code}, "
-          f"{len(r.content)} bytes, content-type {r.headers.get('content-type')}")
+
+if not KEY:
+    raise SystemExit("FTC_API_KEY is not set")
+
+today = datetime.now(timezone.utc).date()
+rows, seen, fetched = [], set(), 0
+for back in range(LOOKBACK_DAYS, 0, -1):
+    day = (today - timedelta(days=back)).isoformat()
+    records = fetch_day(day)
+    fetched += len(records)
+    print(f"{day}: {len(records)} complaints")
+    for a in records:
+        p = normalize(a.get("company-phone-number"))
+        if not p:
+            continue  # the API carries some malformed rows
+        s = (a.get("subject") or "").strip()
+        comment = f"Reported to FTC Do Not Call registry{' — ' + s if s else ''}"
+        if (p, comment) in seen:
+            continue
+        seen.add((p, comment))
+        rows.append({
+            "phone_number": p,
+            "type": classify(s, a.get("recorded-message-or-robocall")),
+            "comment": comment,
+        })
+
+# Every weekday has thousands of complaints; four days with none means the API
+# or the key is broken, not a quiet week.
+if fetched == 0:
+    print(f"::error::FTC API returned no complaints for the last {LOOKBACK_DAYS} days")
     raise SystemExit(1)
 
-rows = list(csv.DictReader(io.StringIO(r.content.decode('utf-8', 'replace'))))
-batch = []
-seen = set()
-
-for row in rows:
-    p = normalize(row.get('Company_Phone_Number', ''))
-    if not p or p in seen:
-        continue
-    seen.add(p)
-    s = row.get('Subject', '')
-    rb = row.get('Recorded_Message_Or_Robocall', 'N')
-    batch.append({
-        'phone_number': p,
-        'is_spam': True,
-        'type': classify(s, rb),
-        'comment': f"Reported to FTC Do Not Call registry{' — ' + s if s else ''}",
-        'source': 'ftc_dnc',
-        'ip_hash': 'ftc_open_data',
-    })
-
-# spam_reports.dedupe_key is a generated md5 of (phone_number, comment, source)
-# with a unique index, so re-importing a report we already hold is skipped by
-# the database instead of inserting a duplicate. Before this, repeated imports
-# of overlapping source data left 17,374 duplicate rows and inflated the report
-# counts shown for 8,875 numbers. ignore_duplicates maps to
-# ON CONFLICT (dedupe_key) DO NOTHING.
-#
-# `saved` therefore counts rows *sent*, not rows stored — the database does not
-# report how many it skipped.
-sent = 0
-for i in range(0, len(batch), 500):
-    chunk = batch[i:i + 500]
-    try:
-        (
-            supabase.table('spam_reports')
-            .upsert(chunk, on_conflict='dedupe_key',
-                    ignore_duplicates=True, returning='minimal')
-            .execute()
-        )
-        sent += len(chunk)
-        record_touched([rec['phone_number'] for rec in chunk])
-    except Exception as e:
-        print(f"Batch insert failed, retrying row by row: {e}")
-        for rec in chunk:
-            try:
-                (
-                    supabase.table('spam_reports')
-                    .upsert(rec, on_conflict='dedupe_key',
-                            ignore_duplicates=True, returning='minimal')
-                    .execute()
-                )
-                sent += 1
-                record_touched([rec['phone_number']])
-            except Exception:
-                pass
-saved = sent
-
-print(f"Done! {saved} rows sent for {date_str} (duplicates skipped by the database)")
+sent, inserted = import_rows("ftc_dnc", rows)
+print(f"Done: {fetched} complaints, {sent} rows sent, {inserted} new (duplicates skipped)")

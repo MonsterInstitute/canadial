@@ -69,15 +69,23 @@ CREATE TABLE reports (
   created_at    TEXT NOT NULL,
   hidden        INTEGER NOT NULL DEFAULT 0,
   hidden_reason TEXT,
+  spam_score    INTEGER,
+  -- md5(phone_number || comment || source) for imported rows, as on Supabase;
+  -- null for community submissions so they never collide.
   dedupe_key    TEXT UNIQUE
 );
 CREATE INDEX reports_by_phone ON reports (phone, created_at DESC) WHERE hidden = 0;
 CREATE INDEX reports_recent   ON reports (created_at DESC) WHERE hidden = 0 AND is_spam = 1;
 
+-- Same columns as the Supabase table (ids are its uuids). description and
+-- website don't exist there; the number page reads them, so they stay as
+-- nullable columns for when that data is added.
 CREATE TABLE organizations (
-  id INTEGER PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   phone INTEGER NOT NULL UNIQUE,
-  name TEXT, department TEXT, category TEXT, description TEXT, hours TEXT, tip TEXT, slug TEXT, website TEXT
+  name TEXT, department TEXT, category TEXT, description TEXT, hours TEXT,
+  tip TEXT, slug TEXT, website TEXT,
+  created_at TEXT
 );
 
 CREATE TABLE api_keys (

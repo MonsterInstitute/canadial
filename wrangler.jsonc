@@ -1,19 +1,35 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "canadial-spike",
+  "name": "canadial",
   "main": "worker.ts",
   "compatibility_date": "2026-10-15",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
-  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "canadial-spike" }],
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "canadial" }],
   "observability": { "enabled": true },
+  // Only the custom domains serve the site: no *.workers.dev or preview URLs,
+  // which would be unprotected duplicates of it.
+  "workers_dev": false,
+  "preview_urls": false,
+  // Staging until cutover; www.canadial.com and canadial.com are added then.
+  "routes": [{ "pattern": "next.canadial.com", "custom_domain": true }],
   "d1_databases": [
-    // App data. database_id is filled in after `wrangler d1 create`.
-    { "binding": "DB", "database_name": "canadial-spike", "database_id": "c23c8626-47b1-4d3e-b4fb-aa9ab60c5792", "migrations_dir": "migrations" },
+    { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "migrations_dir": "migrations" },
     // OpenNext tag cache for revalidatePath(); kept apart from app data.
-    { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-spike-tags", "database_id": "78ee1d95-3e28-4e49-9720-d4eae25129c2" }
+    { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-tags", "database_id": "293d8ecd-c499-4061-b4cf-deb63a541b03" }
   ],
-  "r2_buckets": [{ "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-spike-opennext-cache" }],
+  "r2_buckets": [{ "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-opennext-cache" }],
   "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
+  "env": {
+    // Used only by `next build` (see next.config.ts): pages prerendered at build
+    // time read the production database, as Vercel builds read Supabase. Local
+    // `next dev` uses the default (local) bindings and never touches production.
+    "build": {
+      "routes": [],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "remote": true }
+      ]
+    }
+  }
 }

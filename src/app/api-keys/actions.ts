@@ -1,7 +1,7 @@
 "use server";
 
 import { randomBytes } from "crypto";
-import { supabaseAdmin } from "@/lib/supabase";
+import { run } from "@/lib/d1";
 
 export type KeyState = { ok: boolean; message: string; apiKey?: string };
 
@@ -24,16 +24,17 @@ export async function requestApiKey(
   // The schema has no "intended use" column, so fold it into the name for now.
   const label = use ? `${name} (${use})` : name;
 
-  const { error } = await supabaseAdmin.from("api_keys").insert({
-    key: apiKey,
-    name: label,
-    email,
-    tier: "free",
-    monthly_limit: 100,
-  });
-
-  if (error) {
-    console.error("requestApiKey insert failed:", error.message);
+  try {
+    // Same defaults the Supabase table had: free tier, 100/month, the usage
+    // window resetting 30 days out.
+    await run(
+      `INSERT INTO api_keys (id, key, name, email, tier, monthly_limit, usage_count, usage_reset_at, created_at, is_active)
+       VALUES (?, ?, ?, ?, 'free', 100, 0,
+               strftime('%Y-%m-%dT%H:%M:%f', 'now', '+30 days'), strftime('%Y-%m-%dT%H:%M:%f', 'now'), 1)`,
+      [crypto.randomUUID(), apiKey, label, email]
+    );
+  } catch (e) {
+    console.error("requestApiKey insert failed:", e);
     return {
       ok: false,
       message: "Could not create your key right now. Please try again later.",

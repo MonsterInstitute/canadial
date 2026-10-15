@@ -1,7 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { supabaseAdmin } from "@/lib/supabase";
+import { headers } from "next/headers";
+import { run } from "@/lib/d1";
+import { refreshNumber } from "@/lib/refresh";
+import { purgeNumberPages } from "@/lib/edge-cache";
 import { normalizePhone } from "@/lib/lookup";
 
 const VALID_TYPES = [
@@ -28,21 +31,28 @@ export async function submitReport(
   const type = VALID_TYPES.includes(rawType) ? rawType : "Other";
   const comment = String(formData.get("comment") || "").trim().slice(0, 1000);
 
-  const { error } = await supabaseAdmin.from("spam_reports").insert({
-    phone_number: phone,
-    is_spam,
-    type,
-    comment: comment || null,
-  });
-
-  if (error) {
-    // Surface the real cause in server logs (auth/RLS/schema) instead of hiding it.
-    console.error("submitReport insert failed:", error.code, error.message);
+  try {
+    // Community reports have no source and no dedupe_key, so two people
+    // reporting the same number with the same comment both go through — the
+    // form must never reject a genuine submission. created_at uses the same
+    // "YYYY-MM-DDTHH:MM:SS.fff" UTC form as the imported rows.
+    await run(
+      `INSERT INTO reports (id, phone, is_spam, type, comment, created_at, hidden)
+       VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'), 0)`,
+      [crypto.randomUUID(), Number(phone), is_spam ? 1 : 0, type, comment || null]
+    );
+    await refreshNumber(Number(phone));
+  } catch (e) {
+    // Surface the real cause in server logs instead of hiding it.
+    console.error("submitReport insert failed:", e);
     return { ok: false, message: "Could not save your report. Please try again." };
   }
 
-  // Refresh this lookup page and the homepage's recent-reports list.
-  revalidatePath(`/lookup/${phone}`);
+  // The number page is cached at the edge (worker.ts); the homepage's
+  // recent-reports list is ISR.
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  await purgeNumberPages([phone], host ? `${h.get("x-forwarded-proto") ?? "https"}://${host}` : undefined);
   revalidatePath("/");
 
   return { ok: true, message: "Thanks! Your report has been submitted." };

@@ -8,10 +8,15 @@
 //     render cost needs URLs that have never been requested.
 //  2. a D1 meter per request: total rows read/written and query count, sent
 //     back as x-d1-* headers and logged as one JSON line, so rows-per-render is
-//     measured rather than estimated.
+//     measured rather than estimated (health.yml asserts the bound).
+//  3. host handling: the apex 308s to www, and any other hostname (staging)
+//     is served with noindex and a disallow-all robots.txt.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-// @ts-expect-error `.open-next/worker.js` is generated at build time and untyped
+// `.open-next/worker.js` exists only after a build, so this must compile both
+// with and without it: @ts-expect-error would fail once it exists.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
 import { default as handler } from "./.open-next/worker.js";
 
 type D1Meter = { rowsRead: number; rowsWritten: number; queries: number };
@@ -52,46 +57,74 @@ async function render(request: Request, env: unknown, ctx: ExecutionContext) {
   return new Response(body, { status: response.status, statusText: response.statusText, headers });
 }
 
+const PRODUCTION_HOST = "www.canadial.com";
+const APEX_HOST = "canadial.com";
+// What browsers get for a number page: always revalidate, as Vercel sent.
+// The edge copy is governed by EDGE_TTL_SECONDS, not by this.
+const NUMBER_PAGE_BROWSER_CACHE = "public, max-age=0, must-revalidate";
+
 export default {
   async fetch(request: Request, env: unknown, ctx: ExecutionContext): Promise<Response> {
-    // SPIKE ONLY: the spike database is synthetic — made-up spam reports on
-    // random, real-looking numbers — so it must not be publicly readable.
-    // Fails closed: no SPIKE_KEY secret, no access. Remove before cutover.
-    const spikeKey = (env as { SPIKE_KEY?: string }).SPIKE_KEY;
-    if (!spikeKey || request.headers.get("x-spike-key") !== spikeKey) {
-      return new Response("Not found", { status: 404, headers: { "x-robots-tag": "noindex" } });
-    }
-
     const url = new URL(request.url);
-    if (request.method !== "GET" || !NUMBER_PAGE.test(url.pathname)) {
-      return render(request, env, ctx);
+
+    // The apex redirects to www, permanently, as it did on Vercel.
+    if (url.hostname === APEX_HOST) {
+      return Response.redirect(`https://${PRODUCTION_HOST}${url.pathname}${url.search}`, 308);
     }
 
-    // Key on the path alone: query strings would let anyone mint unlimited
-    // cache misses (each a render and D1 reads) for the same page.
-    const key = new Request(`${url.origin}${url.pathname}`, { method: "GET" });
-    const cache = (caches as unknown as { default: Cache }).default;
-    const hit = await cache.match(key);
-    if (hit) {
-      const headers = new Headers(hit.headers);
-      headers.set("x-edge-cache", "HIT");
-      return new Response(hit.body, { status: hit.status, headers });
+    // Any other hostname (next.canadial.com while staging) serves the same
+    // site but must never be indexed as a duplicate of it.
+    if (url.hostname !== PRODUCTION_HOST) {
+      if (url.pathname === "/robots.txt") {
+        return new Response("User-agent: *\nDisallow: /\n", {
+          headers: { "content-type": "text/plain", "x-robots-tag": "noindex, nofollow" },
+        });
+      }
+      const res = await serve(request, url, env, ctx);
+      const headers = new Headers(res.headers);
+      headers.set("x-robots-tag", "noindex, nofollow");
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
     }
 
-    const response = await render(request, env, ctx);
-    // Only 200s. A 500 must never be cached (invariant 6); 404s and redirects
-    // are cheap to recompute and not worth a cache slot each.
-    if (response.status === 200) {
-      const cached = new Response(response.clone().body, response);
-      cached.headers.set("Cache-Control", `public, s-maxage=${EDGE_TTL_SECONDS}`);
-      cached.headers.delete("set-cookie");
-      ctx.waitUntil(cache.put(key, cached));
-    }
-    const headers = new Headers(response.headers);
-    headers.set("x-edge-cache", "MISS");
-    return new Response(response.body, { status: response.status, headers });
+    return serve(request, url, env, ctx);
   },
 } satisfies ExportedHandler;
 
-// @ts-expect-error `.open-next/worker.js` is generated at build time and untyped
+async function serve(request: Request, url: URL, env: unknown, ctx: ExecutionContext) {
+  if (request.method !== "GET" || !NUMBER_PAGE.test(url.pathname)) {
+    return render(request, env, ctx);
+  }
+
+  // Key on the path alone: query strings would let anyone mint unlimited
+  // cache misses (each a render and D1 reads) for the same page.
+  const key = new Request(`${url.origin}${url.pathname}`, { method: "GET" });
+  const cache = (caches as unknown as { default: Cache }).default;
+  const hit = await cache.match(key);
+  if (hit) {
+    const headers = new Headers(hit.headers);
+    headers.set("cache-control", NUMBER_PAGE_BROWSER_CACHE);
+    headers.set("x-edge-cache", "HIT");
+    return new Response(hit.body, { status: hit.status, headers });
+  }
+
+  const response = await render(request, env, ctx);
+  // Only 200s. A 500 must never be cached (invariant 6); 404s and redirects
+  // are cheap to recompute and not worth a cache slot each.
+  if (response.status === 200) {
+    const cached = new Response(response.clone().body, response);
+    cached.headers.set("cache-control", `public, s-maxage=${EDGE_TTL_SECONDS}`);
+    cached.headers.delete("set-cookie");
+    ctx.waitUntil(cache.put(key, cached));
+  }
+  const headers = new Headers(response.headers);
+  if (response.status === 200) headers.set("cache-control", NUMBER_PAGE_BROWSER_CACHE);
+  headers.set("x-edge-cache", "MISS");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+
+// `.open-next/worker.js` exists only after a build, so this must compile both
+// with and without it: @ts-expect-error would fail once it exists.
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
 export { DOQueueHandler } from "./.open-next/worker.js";

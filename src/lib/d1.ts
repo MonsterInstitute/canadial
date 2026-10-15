@@ -31,12 +31,12 @@ async function db(): Promise<D1Database> {
   return d1;
 }
 
-async function withDeadline<T>(what: string, p: Promise<T>): Promise<T> {
+async function withDeadline<T>(what: string, p: Promise<T>, ms = QUERY_DEADLINE_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`D1 query exceeded ${QUERY_DEADLINE_MS}ms: ${what}`)),
-      QUERY_DEADLINE_MS
+      () => reject(new Error(`D1 query exceeded ${ms}ms: ${what.slice(0, 120)}`)),
+      ms
     );
   });
   try {
@@ -76,4 +76,21 @@ export async function all<T>(sql: string, ...params: unknown[]): Promise<T[]> {
 export async function first<T>(sql: string, ...params: unknown[]): Promise<T | null> {
   const rows = await all<T>(sql, ...params);
   return rows[0] ?? null;
+}
+
+// A write or maintenance statement. `deadlineMs` is for the rollup refreshes,
+// which aggregate whole tables (seconds, by design, and never on a page
+// render); everything a page or form runs keeps the default.
+export async function run(
+  sql: string,
+  params: unknown[] = [],
+  deadlineMs = QUERY_DEADLINE_MS
+): Promise<{ rowsRead: number; rowsWritten: number; changes: number }> {
+  const res = await withDeadline(sql, (await db()).prepare(sql).bind(...params).run(), deadlineMs);
+  meter(res.meta);
+  return {
+    rowsRead: res.meta.rows_read ?? 0,
+    rowsWritten: res.meta.rows_written ?? 0,
+    changes: res.meta.changes ?? 0,
+  };
 }

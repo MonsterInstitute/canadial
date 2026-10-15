@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getMonthlyReport } from "@/lib/reports";
 import { formatPhone } from "@/lib/phone";
-import { REPORTS_CONTENT, getLocale, interp } from "@/lib/i18n";
+import { REPORTS_CONTENT, getLocale, interp, localizedMonth } from "@/lib/i18n";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
 
 // On-demand ISR: each localized month renders from live data on first request,
@@ -37,14 +37,6 @@ function parse(yearStr: string, monthStr: string) {
     Number.isInteger(year) && year >= 2000 && year <= 2100 &&
     Number.isInteger(month) && month >= 1 && month <= 12;
   return { year, month, valid };
-}
-
-function localizedMonth(year: number, month: number, htmlLang: string): string {
-  return new Intl.DateTimeFormat(htmlLang, {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, month - 1, 1)));
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
