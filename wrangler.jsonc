@@ -11,11 +11,14 @@
   // which would be unprotected duplicates of it.
   "workers_dev": false,
   "preview_urls": false,
-  // canadial.com 308s to www in worker.ts. next.canadial.com was the staging
-  // host (noindex); kept through the rollback window.
+  // www and apex are Worker routes over the zone's existing (proxied) DNS
+  // records, not custom domains: Cloudflare won't attach a custom domain to a
+  // hostname that already has records, and deleting them first would leave a
+  // window of NXDOMAIN that resolvers cache. canadial.com 308s to www in
+  // worker.ts. next.canadial.com was the staging host (noindex).
   "routes": [
-    { "pattern": "www.canadial.com", "custom_domain": true },
-    { "pattern": "canadial.com", "custom_domain": true },
+    { "pattern": "www.canadial.com/*", "zone_name": "canadial.com" },
+    { "pattern": "canadial.com/*", "zone_name": "canadial.com" },
     { "pattern": "next.canadial.com", "custom_domain": true }
   ],
   "d1_databases": [
