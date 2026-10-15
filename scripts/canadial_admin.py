@@ -32,6 +32,25 @@ def post(path, payload=None):
         raise SystemExit(f"POST {path} failed: HTTP {e.code} {e.read().decode()[:300]}")
 
 
+def post_status(path, payload=None):
+    """Like post(), but returns (status, body) instead of exiting on an HTTP error."""
+    req = urllib.request.Request(
+        f"{SITE}{path}",
+        data=json.dumps(payload or {}).encode(),
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json", "User-Agent": USER_AGENT},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            return e.code, json.loads(body)
+        except ValueError:
+            return e.code, body[:300]
+
+
 def record_touched(numbers):
     """Append numbers to $TOUCHED_NUMBERS_FILE for scripts/revalidate_pages.py,
     which refreshes their cached pages after the import. No-op when unset."""

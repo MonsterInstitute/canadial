@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 # Everything writes through the site's admin API (src/app/api/admin/*), so the
-# only credentials here are ADMIN_TOKEN for the site and FTC_API_KEY for the
-# FTC API. No database credentials.
+# only credentials here are ADMIN_TOKEN and REVALIDATE_SECRET. No database
+# credentials.
 jobs:
   import:
     runs-on: ubuntu-latest
@@ -28,9 +28,8 @@ jobs:
       - name: Install dependencies
         run: pip install requests beautifulsoup4 lxml
 
+      # Raw FTC files go to R2 first, then into the per-number aggregates.
       - name: Run FTC importer (US data)
-        env:
-          FTC_API_KEY: ${{ secrets.FTC_API_KEY }}
         run: python scripts/ftc_daily.py
 
       - name: Run ReverseCanada importer (Canadian data)

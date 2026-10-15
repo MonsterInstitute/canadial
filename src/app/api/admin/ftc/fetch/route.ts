@@ -1,5 +1,6 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { authorize, json } from "@/lib/admin-auth";
+import { rawKey } from "@/lib/ftc-ingest";
 
 // Fetch one FTC "DNC_Complaint_Numbers_<day>.csv" from ftc.gov and store it,
 // byte for byte, in R2 (canadial-data/ftc/raw/<yyyy>/...). Raw files are the
@@ -20,10 +21,6 @@ export const dynamic = "force-dynamic";
 
 const HEADER = "Company_Phone_Number,Created_Date,Violation_Date,Consumer_City,Consumer_State,Consumer_Area_Code,Subject,Recorded_Message_Or_Robocall";
 const ATTEMPTS = 3;
-
-function rawKey(day: string) {
-  return `ftc/raw/${day.slice(0, 4)}/DNC_Complaint_Numbers_${day}.csv`;
-}
 
 async function sha256(buf: ArrayBuffer) {
   const d = await crypto.subtle.digest("SHA-256", buf);
