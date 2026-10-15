@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "crypto";
 import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase";
+import { REPORTS_CONTENT } from "@/lib/i18n";
 
 // Moderation endpoint: hide or unhide a single spam report.
 //
@@ -86,7 +87,7 @@ export async function POST(req: Request) {
   // rather than a silent no-op.
   const { data: existing, error: findErr } = await supabaseAdmin
     .from("spam_reports")
-    .select("id, phone_number, comment, hidden")
+    .select("id, phone_number, comment, hidden, created_at")
     .eq("id", id)
     .maybeSingle();
 
@@ -126,12 +127,30 @@ export async function POST(req: Request) {
     );
   }
 
+  // monthly_reports is materialized the same way; recompute the month this
+  // report falls in so its counts and top numbers drop it too. Months are UTC,
+  // matching the SQL.
+  const ym = String(existing.created_at ?? "").slice(0, 7);
+  if (/^\d{4}-\d{2}$/.test(ym)) {
+    const { error: monthErr } = await supabaseAdmin.rpc("refresh_monthly_reports", {
+      p_months: [ym],
+    });
+    if (monthErr) {
+      console.error(`moderation: refresh_monthly_reports(${ym}) failed:`, monthErr.message);
+    }
+  }
+
   // The number's own page, its area code, and the homepage lists all show this
   // report; drop their cached copies so the change is visible immediately
   // rather than at the next revalidate (a day for number pages).
   revalidatePath(`/lookup/${phone}`);
   revalidatePath(`/area/${areaCode}`);
   revalidatePath("/");
+  if (/^\d{4}-\d{2}$/.test(ym)) {
+    const monthPath = `/reports/${ym.replace("-", "/")}`;
+    revalidatePath(monthPath);
+    for (const lang of Object.keys(REPORTS_CONTENT)) revalidatePath(`/${lang}${monthPath}`);
+  }
 
   console.log(
     `moderation: report ${id} on ${phone} ${hidden ? "hidden" : "unhidden"}` +

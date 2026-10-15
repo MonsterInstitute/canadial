@@ -90,6 +90,14 @@ def main():
     except FileNotFoundError:
         numbers = []
 
+    # Nothing written means nothing to refresh. This also matters during a
+    # database outage, when the importers write nothing: revalidatePath()
+    # invalidates outright rather than marking stale (measured with next start
+    # against a failing database), so a revalidated page re-renders on its
+    # next visit, fails, and returns a 500 instead of its last good copy.
+    if not numbers:
+        print("no numbers touched; nothing to revalidate")
+        return
     paths = build_paths(numbers, datetime.now(timezone.utc))
     print(f"{len(numbers)} touched numbers -> {len(paths)} paths")
 

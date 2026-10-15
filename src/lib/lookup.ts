@@ -12,24 +12,34 @@ export async function lookupPhone(phone: string) {
     return { type: 'invalid', data: null }
   }
 
-  // Check organizations first (legitimate numbers)
-  const { data: org } = await supabaseAdmin
+  // Every query error throws instead of reading as "no data". These results are
+  // ISR-cached for a week, and an outage that renders as "No reports yet" gets
+  // cached and served as fact — that happened during the October egress
+  // restriction. A thrown render is never cached: ISR keeps serving the last
+  // good copy and retries on the next request, and a page with no good copy
+  // yet returns a 500 until the database answers again.
+
+  // Check organizations first (legitimate numbers). maybeSingle(), not
+  // single(): "no row" is the common case, not an error.
+  const { data: org, error: orgErr } = await supabaseAdmin
     .from('organizations')
     .select('*')
     .eq('phone_number', normalized)
-    .single()
+    .maybeSingle()
+  if (orgErr) throw new Error(`lookupPhone(${normalized}) organizations: ${orgErr.message}`)
 
   if (org) {
     return { type: 'legitimate', data: org }
   }
 
   // Check spam reports
-  const { data: reports } = await supabaseAdmin
+  const { data: reports, error: reportsErr } = await supabaseAdmin
     .from('spam_reports')
     .select('*')
     .eq('phone_number', normalized)
     .eq('hidden', false)
     .order('created_at', { ascending: false })
+  if (reportsErr) throw new Error(`lookupPhone(${normalized}) spam_reports: ${reportsErr.message}`)
 
   if (reports && reports.length > 0) {
     const spamCount = reports.filter(r => r.is_spam).length

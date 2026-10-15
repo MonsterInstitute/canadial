@@ -3,9 +3,6 @@ import { supabaseAdmin } from "./supabase";
 import { regionForCode } from "./area-codes";
 import { provinceForAreaCode } from "./provinces";
 
-const PAGE = 1000;
-const MAX_PAGES = 500;
-
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -14,12 +11,6 @@ const MONTH_NAMES = [
 export function monthName(year: number, month: number): string {
   return `${MONTH_NAMES[month - 1] ?? "?"} ${year}`;
 }
-
-type Row = {
-  phone_number: string;
-  type: string | null;
-  created_at: string;
-};
 
 export type TypeStat = { type: string; count: number; pct: number };
 export type CodeStat = { code: string; region: string; count: number };
@@ -44,128 +35,79 @@ export type MonthlyReport = {
   pctChange: number | null;
 };
 
-function ym(dateStr: string): string {
-  // "2026-06-15T..." -> "2026-06"
-  return dateStr.slice(0, 7);
+// The aggregates for one month, as materialized by refresh_monthly_reports()
+// (see the 20261015120000 migration). Province and region rollups happen here
+// because the area-code -> province mapping lives in TypeScript.
+type MonthlyPayload = {
+  total_numbers_all_time?: unknown;
+  month_numbers?: unknown;
+  month_reports?: unknown;
+  new_this_month?: unknown;
+  prev_month_numbers?: unknown;
+  type_counts?: unknown;
+  area_code_counts?: unknown;
+  top_numbers?: unknown;
+};
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-async function fetchAllRows(): Promise<Row[]> {
-  const rows: Row[] = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE;
-    const { data, error } = await supabaseAdmin
-      .from("spam_reports")
-      .select("phone_number, type, created_at")
-      .eq("hidden", false)
-      .order("phone_number", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) {
-      console.error("reports.fetchAllRows failed:", error.message);
-      break;
+function counts(v: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (v && typeof v === "object") {
+    for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
+      if (typeof n === "number" && n > 0) out.set(k, n);
     }
-    if (!data || data.length === 0) break;
-    rows.push(...(data as Row[]));
-    if (data.length < PAGE) break;
   }
-  return rows;
+  return out;
 }
 
-// Distinct year-months that actually contain reports, newest first.
+function ymKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+// Months that have a materialized report, newest first. One read of a table
+// with a row per month. Throws on a database error: an empty list here would
+// drop every month from the index pages and the sitemap, and prerender none.
 export async function getReportableMonths(): Promise<{ year: number; month: number }[]> {
-  const { data: minData } = await supabaseAdmin
-    .from("spam_reports")
-    .select("created_at")
-    .eq("hidden", false)
-    .order("created_at", { ascending: true })
-    .limit(1);
-  const { data: maxData } = await supabaseAdmin
-    .from("spam_reports")
-    .select("created_at")
-    .eq("hidden", false)
-    .order("created_at", { ascending: false })
-    .limit(1);
-  if (!minData?.length || !maxData?.length) return [];
-
-  const start = new Date(minData[0].created_at);
-  const end = new Date(maxData[0].created_at);
+  const { data, error } = await supabaseAdmin.rpc("get_reportable_months");
+  if (error) throw new Error(`get_reportable_months: ${error.message}`);
+  if (!Array.isArray(data)) return [];
   const months: { year: number; month: number }[] = [];
-  let y = start.getUTCFullYear();
-  let m = start.getUTCMonth(); // 0-based
-  while (y < end.getUTCFullYear() || (y === end.getUTCFullYear() && m <= end.getUTCMonth())) {
-    months.push({ year: y, month: m + 1 });
-    m++;
-    if (m > 11) {
-      m = 0;
-      y++;
-    }
+  for (const ym of data as unknown[]) {
+    const m = typeof ym === "string" ? ym.match(/^(\d{4})-(\d{2})$/) : null;
+    if (m) months.push({ year: Number(m[1]), month: Number(m[2]) });
   }
-  return months.reverse();
+  return months;
 }
 
-function mostCommon(items: string[]): string | null {
-  if (!items.length) return null;
-  const c = new Map<string, number>();
-  for (const it of items) c.set(it, (c.get(it) ?? 0) + 1);
-  let best: string | null = null;
-  let bestN = -1;
-  for (const [k, n] of c) if (n > bestN) [best, bestN] = [k, n];
-  return best;
-}
-
+// One month's report: a primary-key read of monthly_reports. This used to page
+// the entire spam_reports table into the app on every render — the egress
+// burn and build timeouts described in the migration. Returns null only when
+// the month genuinely has no report (the page then 404s); a database error
+// throws, so ISR keeps serving the last good copy instead of caching a 404.
+//
+// No scan fallback, on purpose: the fallback would be the full-table read this
+// replaced.
 export async function getMonthlyReport(
   year: number,
   month: number
 ): Promise<MonthlyReport | null> {
-  const rows = await fetchAllRows();
-  if (!rows.length) return null;
+  const { data, error } = await supabaseAdmin.rpc("get_monthly_report", {
+    p_ym: ymKey(year, month),
+  });
+  if (error) throw new Error(`get_monthly_report(${ymKey(year, month)}): ${error.message}`);
+  if (!data || typeof data !== "object") return null;
+  const d = data as MonthlyPayload;
 
-  const target = `${year}-${String(month).padStart(2, "0")}`;
-  // previous month
-  const prevDate = new Date(Date.UTC(year, month - 2, 1));
-  const prevTarget = `${prevDate.getUTCFullYear()}-${String(
-    prevDate.getUTCMonth() + 1
-  ).padStart(2, "0")}`;
-
-  // First-seen month per distinct number (for "new this month") + all-time set.
-  const firstSeen = new Map<string, string>();
-  const allNumbers = new Set<string>();
-  for (const r of rows) {
-    if (!r.phone_number || r.phone_number.length !== 10) continue;
-    allNumbers.add(r.phone_number);
-    const seen = firstSeen.get(r.phone_number);
-    if (!seen || r.created_at < seen) firstSeen.set(r.phone_number, r.created_at);
-  }
-
-  const monthRows = rows.filter(
-    (r) => r.phone_number?.length === 10 && ym(r.created_at) === target
-  );
-  if (!monthRows.length) return null;
-
-  // Distinct numbers this month, and report counts / types per number.
-  const monthNumberSet = new Set<string>();
-  const reportsPerNumber = new Map<string, number>();
-  const typesPerNumber = new Map<string, string[]>();
-  const typeCounts = new Map<string, number>();
-  for (const r of monthRows) {
-    monthNumberSet.add(r.phone_number);
-    reportsPerNumber.set(r.phone_number, (reportsPerNumber.get(r.phone_number) ?? 0) + 1);
-    if (r.type) {
-      typeCounts.set(r.type, (typeCounts.get(r.type) ?? 0) + 1);
-      const arr = typesPerNumber.get(r.phone_number) ?? [];
-      arr.push(r.type);
-      typesPerNumber.set(r.phone_number, arr);
-    }
-  }
-
-  // New this month = numbers whose first-ever report is in this month.
-  let newThisMonth = 0;
-  for (const n of monthNumberSet) {
-    if (ym(firstSeen.get(n)!) === target) newThisMonth++;
-  }
+  const monthNumbers = num(d.month_numbers);
+  const monthReports = num(d.month_reports);
+  if (monthNumbers === 0) return null;
 
   // Type breakdown (by report).
-  const typeBreakdown: TypeStat[] = Array.from(typeCounts.entries())
-    .map(([type, count]) => ({ type, count, pct: (count / monthRows.length) * 100 }))
+  const typeBreakdown: TypeStat[] = Array.from(counts(d.type_counts).entries())
+    .map(([type, count]) => ({ type, count, pct: (count / monthReports) * 100 }))
     .sort((a, b) => b.count - a.count);
   // "Most active scam type" — the dominant *named* threat, ignoring the
   // catch-all "Other" bucket so the headline reflects a real category.
@@ -175,11 +117,7 @@ export async function getMonthlyReport(
     null;
 
   // Area-code counts (distinct numbers).
-  const codeCounts = new Map<string, number>();
-  for (const n of monthNumberSet) {
-    const code = n.slice(0, 3);
-    codeCounts.set(code, (codeCounts.get(code) ?? 0) + 1);
-  }
+  const codeCounts = counts(d.area_code_counts);
   const topAreaCodes: CodeStat[] = Array.from(codeCounts.entries())
     .map(([code, count]) => ({ code, region: regionForCode(code) ?? "—", count }))
     .sort((a, b) => b.count - a.count)
@@ -195,44 +133,39 @@ export async function getMonthlyReport(
     .map(([province, count]) => ({
       province,
       count,
-      pct: (count / monthNumberSet.size) * 100,
+      pct: (count / monthNumbers) * 100,
     }))
     .sort((a, b) => b.count - a.count);
   const topProvince =
     provinceBreakdown.find((p) => p.province !== "Toll-free" && p.province !== "Other / Unknown")
       ?.province ?? provinceBreakdown[0]?.province ?? null;
 
-  // Top reported numbers this month.
-  const topNumbers: NumberStat[] = Array.from(reportsPerNumber.entries())
-    .map(([phone_number, count]) => ({
-      phone_number,
-      count,
-      type: mostCommon(typesPerNumber.get(phone_number) ?? []),
-    }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
+  // Top reported numbers this month (already ranked and capped in SQL).
+  const topNumbers: NumberStat[] = Array.isArray(d.top_numbers)
+    ? (d.top_numbers as { phone_number?: unknown; count?: unknown; type?: unknown }[]).map(
+        (r) => ({
+          phone_number: String(r.phone_number ?? ""),
+          count: num(r.count),
+          type: typeof r.type === "string" ? r.type : null,
+        })
+      )
+    : [];
 
-  // Previous month (distinct numbers) for % change.
-  const prevNumbers = new Set<string>();
-  for (const r of rows) {
-    if (r.phone_number?.length === 10 && ym(r.created_at) === prevTarget) {
-      prevNumbers.add(r.phone_number);
-    }
-  }
-  const prevMonthNumbers = prevNumbers.size > 0 ? prevNumbers.size : null;
+  const prev = num(d.prev_month_numbers);
+  const prevMonthNumbers = prev > 0 ? prev : null;
   const pctChange =
     prevMonthNumbers !== null
-      ? ((monthNumberSet.size - prevMonthNumbers) / prevMonthNumbers) * 100
+      ? ((monthNumbers - prevMonthNumbers) / prevMonthNumbers) * 100
       : null;
 
   return {
     year,
     month,
     label: monthName(year, month),
-    totalNumbersAllTime: allNumbers.size,
-    monthNumbers: monthNumberSet.size,
-    monthReports: monthRows.length,
-    newThisMonth,
+    totalNumbersAllTime: num(d.total_numbers_all_time),
+    monthNumbers,
+    monthReports,
+    newThisMonth: num(d.new_this_month),
     typeBreakdown,
     topType,
     topAreaCodes,

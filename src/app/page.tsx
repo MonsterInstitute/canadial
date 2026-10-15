@@ -43,7 +43,9 @@ async function getRecentReports(): Promise<RecentReport[]> {
   // loses to the DB contention created when the build prerenders hundreds of
   // pages at once — that's what left this list empty ("No reports yet") even
   // though the data was there. Retry a couple of times to ride out transient
-  // load before giving up.
+  // load, then throw: an empty list here is cached for an hour (and was once
+  // baked into a build), and a failed render keeps the last good homepage.
+  let lastError = "no rows returned";
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const { data, error } = await supabaseAdmin
@@ -54,6 +56,7 @@ async function getRecentReports(): Promise<RecentReport[]> {
         .order("created_at", { ascending: false })
         .limit(10);
       if (error) {
+        lastError = error.message;
         console.error(
           `getRecentReports attempt ${attempt + 1} failed:`,
           error.message
@@ -62,12 +65,14 @@ async function getRecentReports(): Promise<RecentReport[]> {
         return data;
       }
     } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
       console.error(`getRecentReports attempt ${attempt + 1} threw:`, e);
     }
     // Brief backoff before retrying.
     await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
   }
-  return [];
+  // The table is never empty in production, so zero rows is a failure too.
+  throw new Error(`getRecentReports: ${lastError}`);
 }
 
 // Province labels are stored long ("Nova Scotia / PEI"); trim to something that

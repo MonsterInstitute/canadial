@@ -58,8 +58,19 @@ url = f"https://www.ftc.gov/sites/default/files/DNC_Complaint_Numbers_{date_str}
 print(f"Fetching FTC data for {date_str}...")
 r = requests.get(url, headers=HEADERS, timeout=30)
 if r.status_code != 200:
-    print(f"File not available: {r.status_code}")
-    raise SystemExit(0)
+    # The FTC posts a file each weekday; weekend complaints land in Monday's
+    # file. So a missing Saturday/Sunday file is expected, but a missing weekday
+    # file is a failure. This used to exit 0 on any status, and the import
+    # silently fetched nothing on most days from August to October 2026:
+    # ftc.gov answers scripted clients with a 1.3 KB HTML "404" page even when
+    # the file exists. Federal holidays will also fail here; that is a rare,
+    # visible false alarm rather than a silent gap.
+    if yesterday.weekday() >= 5:
+        print(f"No file for {date_str} (weekend, expected): HTTP {r.status_code}")
+        raise SystemExit(0)
+    print(f"::error::FTC file for {date_str} not available: HTTP {r.status_code}, "
+          f"{len(r.content)} bytes, content-type {r.headers.get('content-type')}")
+    raise SystemExit(1)
 
 rows = list(csv.DictReader(io.StringIO(r.content.decode('utf-8', 'replace'))))
 batch = []

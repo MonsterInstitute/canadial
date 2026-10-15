@@ -52,7 +52,12 @@ export async function GET(req: Request) {
     .eq("is_active", true)
     .maybeSingle();
 
-  if (keyErr || !keyRow) return json(401, { error: "Invalid or inactive API key." });
+  // A database error is ours, not the caller's: 503, not "invalid key".
+  if (keyErr) {
+    console.error("api/v1/lookup key check failed:", keyErr.message);
+    return json(503, { error: "Lookup is temporarily unavailable." }, { "Retry-After": "300" });
+  }
+  if (!keyRow) return json(401, { error: "Invalid or inactive API key." });
   const row = keyRow as ApiKey;
 
   // 2. Rate limit (reset the window if it has elapsed)
@@ -84,7 +89,13 @@ export async function GET(req: Request) {
   }
 
   // 4. Look up
-  const result = await lookupPhone(phone);
+  let result: Awaited<ReturnType<typeof lookupPhone>>;
+  try {
+    result = await lookupPhone(phone);
+  } catch (e) {
+    console.error("api/v1/lookup lookup failed:", e);
+    return json(503, { error: "Lookup is temporarily unavailable." }, { "Retry-After": "300" });
+  }
 
   // 5. Count this request (best-effort; not strictly atomic).
   await supabaseAdmin.from("api_keys").update({ usage_count: usage + 1 }).eq("id", row.id);

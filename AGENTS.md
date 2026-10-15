@@ -45,8 +45,11 @@ That difference is the entire reason `get_area_summary()` exists.
    returns the answer (`get_site_stats`, `get_area_code_counts`,
    `get_area_summary`). Never page raw rows in to reduce them in TypeScript —
    that is what `getAllPhoneNumbers()` did, and it is why the sitemap alone
-   could burn the monthly budget. Every RPC path keeps a scan fallback so a
-   missing migration degrades instead of breaking.
+   could burn the monthly budget — and what `getMonthlyReport()` still did
+   until October 2026 (the whole table per render; it caused the third
+   egress restriction and failed the Oct 11 build). Scan fallbacks run only
+   when an RPC is missing (PostgREST `PGRST202`), never on an outage or
+   timeout; the monthly reports have no fallback at all.
 
 3. **Writing `revalidate` does not mean the page is cached.** A dynamic route
    also needs `generateStaticParams` (returning `[]` is enough) or Next treats
@@ -73,7 +76,20 @@ That difference is the entire reason `get_area_summary()` exists.
    meant ~3.3M URLs across 11 locales, which forced the sitemap to shard, and
    every shard re-scanned the whole table.
 
-6. **Don't remove the daily import.** A free-tier project pauses after 7 days
+6. **A failed read throws; it is never "no data".** Every loader in
+   `src/lib` throws on a database error. Their output is ISR-cached, and an
+   empty result during an outage was cached and served as "No reports yet".
+   A thrown render is never cached: ISR keeps the last good copy and retries
+   on the next request; a page with no good copy returns a 500 (no
+   cache-control) until the database answers. Two consequences, both
+   measured with `next start` against a failing database: a build fails
+   outright while the database is down (so it can't replace production), and
+   `revalidatePath()` invalidates rather than marks stale — a page revalidated
+   during an outage 500s instead of serving its old copy. So nothing may call
+   it unless it just wrote data (`scripts/revalidate_pages.py` sends nothing
+   when no number was touched).
+
+7. **Don't remove the daily import.** A free-tier project pauses after 7 days
    of inactivity. Reads are now almost entirely cache-served, so
    `.github/workflows/daily-import.yml` doubles as the keep-alive.
 
@@ -119,7 +135,7 @@ while still inflating the counts printed beside it.
 ## Daily cycle
 
 `.github/workflows/daily-import.yml` runs at 08:00 UTC: FTC import, ReverseCanada
-import, then `refresh_area_summaries()`. The refresh must stay after the importers — it
+import, then `refresh_area_summaries()` and `refresh_monthly_reports()`. The refreshes must stay after the importers — they
 summarises what the importers just wrote — and the step fails loudly if it
 returns zero, because a silent failure would leave every number page serving
 stale area context indefinitely.
@@ -130,7 +146,7 @@ reported number doesn't keep its week-old cached page. It needs the
 `REVALIDATE_SECRET` GitHub secret to match the Vercel env var of the same name;
 without it the step warns and skips.
 
-This workflow is also the free tier's keep-alive (see invariant 6).
+This workflow is also the free tier's keep-alive (see invariant 7).
 
 ## Watch
 

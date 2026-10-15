@@ -30,6 +30,10 @@ jobs:
         run: python scripts/ftc_daily.py
 
       - name: Run ReverseCanada importer (Canadian data)
+        # Run even when the FTC step fails (it now fails on a missing weekday
+        # file); the job still ends red, but the other sources and the
+        # rollups shouldn't be skipped with it.
+        if: ${{ !cancelled() }}
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -40,10 +44,20 @@ jobs:
       # the only full aggregation in the daily cycle. Chunked because a single
       # full refresh exceeds PostgREST's 8s statement timeout — see the script.
       - name: Refresh area summaries
+        if: ${{ !cancelled() }}
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python scripts/refresh_area_summaries.py
+
+      # Same idea for the monthly report pages: they read one materialized row
+      # per month, so recompute this month and last after the import.
+      - name: Refresh monthly reports
+        if: ${{ !cancelled() }}
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/refresh_monthly_reports.py
 
       # Number pages are ISR-cached for a week, and nothing above goes through
       # the app, so without this a newly reported number keeps its cached page

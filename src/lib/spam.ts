@@ -21,6 +21,26 @@ export type AreaNumber = {
   latest_comment: string | null;
 };
 
+// Every loader here throws on a database error rather than returning an empty
+// result. Their output is ISR-cached (number pages for a week), so an empty
+// result during an outage was cached and served as "No reports yet" long after
+// the database recovered. A thrown render is never cached: ISR keeps the last
+// good copy and retries on the next request.
+//
+// The row-scan fallbacks below run only when an RPC is missing (PostgREST
+// PGRST202 — a migration not applied yet), never on an outage or timeout: a
+// scan that runs because the database is struggling is the unbounded read
+// AGENTS.md exists to prevent.
+type DbError = { code?: string; message: string };
+
+function isMissingFunction(error: DbError): boolean {
+  return error.code === "PGRST202";
+}
+
+function dbError(where: string, error: DbError): Error {
+  return new Error(`${where}: ${error.message}${error.code ? ` (${error.code})` : ""}`);
+}
+
 function mostCommon(items: string[]): string | null {
   if (items.length === 0) return null;
   const counts = new Map<string, number>();
@@ -46,10 +66,7 @@ async function fetchAllPhoneNumbers(): Promise<string[]> {
       .eq("hidden", false)
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error) {
-      console.error("getAllPhoneNumbers failed:", error.message);
-      break;
-    }
+    if (error) throw dbError("getAllPhoneNumbers", error);
     if (!data || data.length === 0) break;
     for (const r of data) {
       if (r.phone_number && r.phone_number.length === 10) set.add(r.phone_number);
@@ -88,10 +105,8 @@ export async function getAllPhoneNumbers(): Promise<string[]> {
 export async function getAreaCodeCounts(): Promise<Record<string, number>> {
   const { data, error } = await supabaseAdmin.rpc("get_area_code_counts");
   if (error) {
-    console.error(
-      "get_area_code_counts RPC failed, falling back to full scan:",
-      error.message
-    );
+    if (!isMissingFunction(error)) throw dbError("get_area_code_counts", error);
+    console.error("get_area_code_counts RPC missing, falling back to full scan");
   } else if (data && typeof data === "object") {
     const counts: Record<string, number> = {};
     for (const [code, n] of Object.entries(data as Record<string, unknown>)) {
@@ -131,10 +146,7 @@ export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]>
     .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(AREA_CODE_ROW_LIMIT);
-  if (error) {
-    console.error(`getNumbersForAreaCode(${code}) failed:`, error.message);
-    return [];
-  }
+  if (error) throw dbError(`getNumbersForAreaCode(${code})`, error);
   const rows = data ?? [];
 
   const byNumber = new Map<string, AreaNumber & { _types: string[] }>();
@@ -226,10 +238,8 @@ export async function getAreaSummary(
     p_limit: limit,
   });
   if (error) {
-    console.error(
-      `get_area_summary(${code}) RPC failed, falling back to scan:`,
-      error.message
-    );
+    if (!isMissingFunction(error)) throw dbError(`get_area_summary(${code})`, error);
+    console.error(`get_area_summary RPC missing, falling back to scan for ${code}`);
     return summarizeAreaNumbers(await getNumbersForAreaCode(code), limit);
   }
 
@@ -264,13 +274,10 @@ export async function getIndexableNumbers(minReports = 2): Promise<string[]> {
   const { data, error } = await supabaseAdmin.rpc("get_indexable_numbers", {
     p_min_reports: minReports,
   });
-  if (error) {
-    // Degrade to a sitemap of core and area-code pages rather than failing the
-    // build: an incomplete sitemap costs some crawling, a broken one costs all
-    // of it.
-    console.error("get_indexable_numbers RPC failed:", error.message);
-    return [];
-  }
+  // Throw rather than return []: an empty list would publish (and cache for a
+  // day) a sitemap missing every number page. A failed sitemap render keeps
+  // serving the previous good one.
+  if (error) throw dbError("get_indexable_numbers", error);
   if (!Array.isArray(data)) return [];
   return (data as unknown[]).filter(
     (n): n is string => typeof n === "string" && n.length === 10
@@ -409,10 +416,8 @@ function normalizeStatsPayload(
 export async function getSiteStats(): Promise<SiteStats> {
   const { data, error } = await supabaseAdmin.rpc("get_site_stats");
   if (error) {
-    console.error(
-      "get_site_stats RPC failed, falling back to scan:",
-      error.message
-    );
+    if (!isMissingFunction(error)) throw dbError("get_site_stats", error);
+    console.error("get_site_stats RPC missing, falling back to scan");
     return getSiteStatsByScan();
   }
   const norm = normalizeStatsPayload(data);
@@ -446,10 +451,7 @@ async function getSiteStatsByScan(): Promise<SiteStats> {
       .eq("hidden", false)
       .order("phone_number", { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error) {
-      console.error("getSiteStatsByScan failed:", error.message);
-      break;
-    }
+    if (error) throw dbError("getSiteStatsByScan", error);
     if (!data || data.length === 0) break;
     for (const r of data) {
       const pn = r.phone_number as string | null;
@@ -493,10 +495,7 @@ export async function getTrendingNumbers(limit = 5): Promise<TrendingNumber[]> {
     .eq("hidden", false)
     .order("created_at", { ascending: false })
     .limit(100);
-  if (error) {
-    console.error("getTrendingNumbers failed:", error.message);
-    return [];
-  }
+  if (error) throw dbError("getTrendingNumbers", error);
 
   const seen = new Set<string>();
   const out: TrendingNumber[] = [];
