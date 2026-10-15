@@ -3,9 +3,9 @@
 //  1. an edge cache for number pages. They render on demand from D1
 //     (force-dynamic), and this caches each 200 in the Cloudflare cache of the
 //     colo that served it, so a crawler's repeat visit costs no render and no
-//     D1 reads. The Cache API is free and only works on a custom domain —
-//     on *.workers.dev every lookup misses, which is what we want when
-//     measuring render cost.
+//     D1 reads. The Cache API is free. It also works on *.workers.dev
+//     (measured: repeat requests were HITs at ~1.3 ms CPU), so measuring
+//     render cost needs URLs that have never been requested.
 //  2. a D1 meter per request: total rows read/written and query count, sent
 //     back as x-d1-* headers and logged as one JSON line, so rows-per-render is
 //     measured rather than estimated.
@@ -54,6 +54,14 @@ async function render(request: Request, env: unknown, ctx: ExecutionContext) {
 
 export default {
   async fetch(request: Request, env: unknown, ctx: ExecutionContext): Promise<Response> {
+    // SPIKE ONLY: the spike database is synthetic — made-up spam reports on
+    // random, real-looking numbers — so it must not be publicly readable.
+    // Fails closed: no SPIKE_KEY secret, no access. Remove before cutover.
+    const spikeKey = (env as { SPIKE_KEY?: string }).SPIKE_KEY;
+    if (!spikeKey || request.headers.get("x-spike-key") !== spikeKey) {
+      return new Response("Not found", { status: 404, headers: { "x-robots-tag": "noindex" } });
+    }
+
     const url = new URL(request.url);
     if (request.method !== "GET" || !NUMBER_PAGE.test(url.pathname)) {
       return render(request, env, ctx);

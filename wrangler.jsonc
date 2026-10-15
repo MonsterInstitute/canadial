@@ -9,9 +9,9 @@
   "observability": { "enabled": true },
   "d1_databases": [
     // App data. database_id is filled in after `wrangler d1 create`.
-    { "binding": "DB", "database_name": "canadial-spike", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" },
+    { "binding": "DB", "database_name": "canadial-spike", "database_id": "c23c8626-47b1-4d3e-b4fb-aa9ab60c5792", "migrations_dir": "migrations" },
     // OpenNext tag cache for revalidatePath(); kept apart from app data.
-    { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-spike-tags", "database_id": "00000000-0000-0000-0000-000000000001" }
+    { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-spike-tags", "database_id": "78ee1d95-3e28-4e49-9720-d4eae25129c2" }
   ],
   "r2_buckets": [{ "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-spike-opennext-cache" }],
   "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
