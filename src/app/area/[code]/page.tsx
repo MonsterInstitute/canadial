@@ -21,8 +21,12 @@ const LISTED_NUMBERS = 100;
 // area code once per request.
 const getSummary = cache((code: string) => getAreaSummary(code, LISTED_NUMBERS));
 
+// Nothing prerendered at build: the build machine only has a local D1, so a
+// prerender would bake its data in. [] still makes the route ISR (see the note
+// in src/app/lookup/[number]/page.tsx history); each code renders from the
+// real database on first request.
 export function generateStaticParams() {
-  return AREA_CODES.map((a) => ({ code: a.code }));
+  return [];
 }
 
 type Props = { params: Promise<{ code: string }> };

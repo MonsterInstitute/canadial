@@ -1,17 +1,16 @@
 import "server-only";
-import { supabaseAdmin } from "./supabase";
+import { all, first } from "./d1";
 import { provinceForAreaCode, isCanadianAreaCode } from "./provinces";
 import { isValidAreaCode } from "./phone";
 
-// These aggregations power the sitemap, area-code pages, and the homepage grid.
-// They run server-side only and use the service-role client so the data is
-// complete even before public-read RLS policies are in place.
-
-// Supabase/PostgREST caps each response at 1000 rows regardless of .limit(),
-// so we page through results with .range(). PAGE is the per-request size and
-// MAX_PAGES is a safety stop (1000 * 500 = 500k rows).
-const PAGE = 1000;
-const MAX_PAGES = 500;
+// These aggregations power the sitemap, area-code pages, the homepage and the
+// number pages. All of them read D1, and all of them are bounded: rollups are
+// materialized by refreshAll() (src/lib/refresh.ts) and read by primary key,
+// lists come off an index with a LIMIT. Nothing here counts or scans rows at
+// render time — that is the invariant that kept Supabase inside its egress
+// budget, and on D1 it is what keeps rows-read per render constant.
+//
+// Errors throw (src/lib/d1.ts): a failed read is never "no data".
 
 export type AreaNumber = {
   phone_number: string;
@@ -21,167 +20,18 @@ export type AreaNumber = {
   latest_comment: string | null;
 };
 
-// Every loader here throws on a database error rather than returning an empty
-// result. Their output is ISR-cached (number pages for a week), so an empty
-// result during an outage was cached and served as "No reports yet" long after
-// the database recovered. A thrown render is never cached: ISR keeps the last
-// good copy and retries on the next request.
-//
-// The row-scan fallbacks below run only when an RPC is missing (PostgREST
-// PGRST202 — a migration not applied yet), never on an outage or timeout: a
-// scan that runs because the database is struggling is the unbounded read
-// AGENTS.md exists to prevent.
-type DbError = { code?: string; message: string };
-
-function isMissingFunction(error: DbError): boolean {
-  return error.code === "PGRST202";
-}
-
-function dbError(where: string, error: DbError): Error {
-  return new Error(`${where}: ${error.message}${error.code ? ` (${error.code})` : ""}`);
-}
-
-function mostCommon(items: string[]): string | null {
-  if (items.length === 0) return null;
-  const counts = new Map<string, number>();
-  for (const it of items) counts.set(it, (counts.get(it) ?? 0) + 1);
-  let best: string | null = null;
-  let bestN = 0;
-  for (const [k, n] of counts) {
-    if (n > bestN) {
-      best = k;
-      bestN = n;
-    }
-  }
-  return best;
-}
-
-async function fetchAllPhoneNumbers(): Promise<string[]> {
-  const set = new Set<string>();
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE;
-    const { data, error } = await supabaseAdmin
-      .from("spam_reports")
-      .select("phone_number")
-      .eq("hidden", false)
-      .order("phone_number", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw dbError("getAllPhoneNumbers", error);
-    if (!data || data.length === 0) break;
-    for (const r of data) {
-      if (r.phone_number && r.phone_number.length === 10) set.add(r.phone_number);
-    }
-    if (data.length < PAGE) break;
-  }
-  return Array.from(set);
-}
-
-let phoneNumbersCache: { at: number; promise: Promise<string[]> } | null = null;
-const PHONE_NUMBERS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-// All distinct, valid 10-digit phone numbers in the database. The sitemap
-// renders one shard per request — dozens of shards across ~300k numbers ×
-// every locale — and every shard used to independently re-scan the whole
-// table for this same list, which was the single largest source of Supabase
-// egress on this site. Memoizing per warm process collapses that back down to
-// one scan per cache window, however many shards end up sharing the process.
-export async function getAllPhoneNumbers(): Promise<string[]> {
-  const now = Date.now();
-  if (!phoneNumbersCache || now - phoneNumbersCache.at > PHONE_NUMBERS_CACHE_TTL_MS) {
-    phoneNumbersCache = { at: now, promise: fetchAllPhoneNumbers() };
-  }
-  try {
-    return await phoneNumbersCache.promise;
-  } catch (e) {
-    phoneNumbersCache = null;
-    throw e;
-  }
-}
-
-// Distinct-number counts grouped by 3-digit area code, via a single Postgres
-// aggregation (see the get_area_code_counts() migration) instead of paging the
-// whole table into the app. Falls back to a full scan if the function isn't
-// deployed yet, so language landing pages keep working either way.
+// Distinct-number counts grouped by 3-digit area code, from the materialized
+// area summaries (one row per valid code).
 export async function getAreaCodeCounts(): Promise<Record<string, number>> {
-  const { data, error } = await supabaseAdmin.rpc("get_area_code_counts");
-  if (error) {
-    if (!isMissingFunction(error)) throw dbError("get_area_code_counts", error);
-    console.error("get_area_code_counts RPC missing, falling back to full scan");
-  } else if (data && typeof data === "object") {
-    const counts: Record<string, number> = {};
-    for (const [code, n] of Object.entries(data as Record<string, unknown>)) {
-      if (typeof n === "number" && n > 0 && isValidAreaCode(code)) counts[code] = n;
-    }
-    if (Object.keys(counts).length > 0) return counts;
-  }
-
-  // The fallback has to apply the same area-code validation as the RPC. It
-  // didn't, and because this function feeds the sitemap, one transient RPC
-  // failure during a build was enough to republish 67 impossible /area/<code>
-  // URLs (000, 111, 010...) to Google — silently undoing the filter added in
-  // the get_area_code_counts migration. Caught by a local build that happened
-  // to hit the fallback.
-  const numbers = await getAllPhoneNumbers();
-  const fallback: Record<string, number> = {};
-  for (const n of numbers) {
-    const code = n.slice(0, 3);
-    if (!isValidAreaCode(code)) continue;
-    fallback[code] = (fallback[code] ?? 0) + 1;
-  }
-  return fallback;
-}
-
-const AREA_CODE_ROW_LIMIT = 100;
-
-// Per-number aggregates for a single area code, busiest first. Bounded to the
-// AREA_CODE_ROW_LIMIT most recent reports for the code — area pages only ever
-// display a handful of numbers, and paging in a high-volume code's entire
-// history was a major source of egress. Counts and ranking below reflect
-// these recent reports, not the code's full lifetime history.
-export async function getNumbersForAreaCode(code: string): Promise<AreaNumber[]> {
-  const { data, error } = await supabaseAdmin
-    .from("spam_reports")
-    .select("phone_number, type, comment, is_spam, created_at")
-    .like("phone_number", `${code}%`)
-    .eq("hidden", false)
-    .order("created_at", { ascending: false })
-    .limit(AREA_CODE_ROW_LIMIT);
-  if (error) throw dbError(`getNumbersForAreaCode(${code})`, error);
-  const rows = data ?? [];
-
-  const byNumber = new Map<string, AreaNumber & { _types: string[] }>();
+  const rows = await all<{ code: number; n: number }>(
+    "SELECT code, json_extract(payload, '$.number_count') AS n FROM area_summaries"
+  );
+  const counts: Record<string, number> = {};
   for (const r of rows) {
-    const pn = r.phone_number as string;
-    // `like '416%'` can match an exchange that merely starts with the digits;
-    // anchor on the true 3-digit area code.
-    if (!pn || pn.length !== 10 || pn.slice(0, 3) !== code) continue;
-    let e = byNumber.get(pn);
-    if (!e) {
-      e = {
-        phone_number: pn,
-        report_count: 0,
-        spam_count: 0,
-        most_common_type: null,
-        latest_comment: null,
-        _types: [],
-      };
-      byNumber.set(pn, e);
-    }
-    e.report_count++;
-    if (r.is_spam) e.spam_count++;
-    if (r.type) e._types.push(r.type as string);
-    // Rows are ordered newest-first, so the first comment we see is the latest.
-    if (!e.latest_comment && r.comment) e.latest_comment = r.comment as string;
+    const code = String(r.code).padStart(3, "0");
+    if (typeof r.n === "number" && r.n > 0 && isValidAreaCode(code)) counts[code] = r.n;
   }
-
-  const out: AreaNumber[] = [];
-  for (const e of byNumber.values()) {
-    const { _types, ...rest } = e;
-    rest.most_common_type = mostCommon(_types);
-    out.push(rest);
-  }
-  out.sort((a, b) => b.report_count - a.report_count);
-  return out;
+  return counts;
 }
 
 // Just enough about an area code to render the context blocks on a number
@@ -207,25 +57,6 @@ type AreaSummaryRow = {
   latest_comment?: unknown;
 };
 
-// Derive the summary from a full getNumbersForAreaCode() scan. Used only when
-// the RPC is unavailable, so a missing migration degrades to the old (heavier)
-// behaviour instead of an empty page.
-function summarizeAreaNumbers(numbers: AreaNumber[], limit: number): AreaSummary {
-  const typeCounts: Record<string, number> = {};
-  for (const n of numbers) {
-    const t = n.most_common_type || "Other";
-    typeCounts[t] = (typeCounts[t] ?? 0) + 1;
-  }
-  return {
-    numberCount: numbers.length,
-    reportTotal: numbers.reduce((s, n) => s + n.report_count, 0),
-    topType:
-      Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
-    typeCounts,
-    topNumbers: numbers.slice(0, limit),
-  };
-}
-
 // `limit` caps only the returned number list; the counts are exact over the
 // whole area code either way. Number pages want a handful of related numbers,
 // area pages want a page's worth.
@@ -233,15 +64,13 @@ export async function getAreaSummary(
   code: string,
   limit = 6
 ): Promise<AreaSummary> {
-  const { data, error } = await supabaseAdmin.rpc("get_area_summary", {
-    p_code: code,
-    p_limit: limit,
-  });
-  if (error) {
-    if (!isMissingFunction(error)) throw dbError(`get_area_summary(${code})`, error);
-    console.error(`get_area_summary RPC missing, falling back to scan for ${code}`);
-    return summarizeAreaNumbers(await getNumbersForAreaCode(code), limit);
-  }
+  // One row by primary key from the materialized area_summaries table (the
+  // daily job refreshes it). No row means the code has no reported numbers.
+  const row = await first<{ payload: string }>(
+    "SELECT payload FROM area_summaries WHERE code = ?",
+    Number(code)
+  );
+  const data: unknown = row ? JSON.parse(row.payload) : {};
 
   const d = (data ?? {}) as Record<string, unknown>;
   const rows = Array.isArray(d.top_numbers) ? (d.top_numbers as AreaSummaryRow[]) : [];
@@ -250,7 +79,7 @@ export async function getAreaSummary(
     reportTotal: typeof d.report_total === "number" ? d.report_total : 0,
     topType: typeof d.top_type === "string" ? d.top_type : null,
     typeCounts: toNumberMap(d.type_counts),
-    topNumbers: rows.map((r) => ({
+    topNumbers: rows.slice(0, limit).map((r) => ({
       phone_number: String(r.phone_number ?? ""),
       report_count: typeof r.report_count === "number" ? r.report_count : 0,
       // spam_count isn't part of the summary — the number pages never read it.
@@ -264,24 +93,20 @@ export async function getAreaSummary(
 }
 
 // The number pages worth listing in the sitemap: numbers reported more than
-// once, plus every verified organization. See the get_indexable_numbers()
-// migration for why the ~307k single-report numbers are deliberately left out —
-// they share 20 boilerplate comment texts between them and Google already
-// declined to index them once.
+// once (numbers.indexable, set by refreshAll()), plus every verified
+// organization. The ~440k single-report numbers are deliberately left out —
+// most share a handful of boilerplate comment texts and Google already
+// declined to index them once. Phase 5 revisits this with real per-number data.
 //
-// One index-only query per sitemap build (daily), ~150 KB.
-export async function getIndexableNumbers(minReports = 2): Promise<string[]> {
-  const { data, error } = await supabaseAdmin.rpc("get_indexable_numbers", {
-    p_min_reports: minReports,
-  });
-  // Throw rather than return []: an empty list would publish (and cache for a
-  // day) a sitemap missing every number page. A failed sitemap render keeps
-  // serving the previous good one.
-  if (error) throw dbError("get_indexable_numbers", error);
-  if (!Array.isArray(data)) return [];
-  return (data as unknown[]).filter(
-    (n): n is string => typeof n === "string" && n.length === 10
+// One partial-index read per sitemap render (daily).
+export async function getIndexableNumbers(): Promise<string[]> {
+  const rows = await all<{ phone: number }>(
+    `SELECT phone FROM numbers WHERE indexable = 1
+     UNION
+     SELECT phone FROM organizations WHERE phone >= 2000000000
+     ORDER BY phone`
   );
+  return rows.map((r) => String(r.phone));
 }
 
 export type SiteStats = {
@@ -409,70 +234,17 @@ function normalizeStatsPayload(
   return null;
 }
 
-// Fast path: a single Postgres aggregation (see the get_site_stats() migration)
-// instead of paging the whole table into the app. Falls back to a full row scan
-// if the function is missing or returns nothing usable, so the homepage keeps
-// working either way.
+// One primary-key read of the materialized site_stats row.
 export async function getSiteStats(): Promise<SiteStats> {
-  const { data, error } = await supabaseAdmin.rpc("get_site_stats");
-  if (error) {
-    if (!isMissingFunction(error)) throw dbError("get_site_stats", error);
-    console.error("get_site_stats RPC missing, falling back to scan");
-    return getSiteStatsByScan();
-  }
-  const norm = normalizeStatsPayload(data);
-  if (!norm) {
-    console.error(
-      "get_site_stats returned an unrecognized payload, falling back to scan"
-    );
-    return getSiteStatsByScan();
-  }
+  const row = await first<{ payload: string }>("SELECT payload FROM site_stats WHERE id = 1");
+  const norm = normalizeStatsPayload(row ? JSON.parse(row.payload) : null);
+  if (!norm) throw new Error("site_stats is empty; run the refresh (src/lib/refresh.ts)");
   return deriveSiteStats(
     norm.totalNumbers,
     norm.totalReports,
     norm.typeCounts,
     norm.areaCodeCounts
   );
-}
-
-// Fallback aggregation: page through spam_reports and roll the stats up in the
-// app. Slow on large tables — kept only for databases where get_site_stats()
-// isn't present.
-async function getSiteStatsByScan(): Promise<SiteStats> {
-  const numbers = new Set<string>();
-  const typeCounts: Record<string, number> = {};
-  let totalReports = 0;
-
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const from = page * PAGE;
-    const { data, error } = await supabaseAdmin
-      .from("spam_reports")
-      .select("phone_number, type, is_spam")
-      .eq("hidden", false)
-      .order("phone_number", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw dbError("getSiteStatsByScan", error);
-    if (!data || data.length === 0) break;
-    for (const r of data) {
-      const pn = r.phone_number as string | null;
-      if (!pn || pn.length !== 10) continue;
-      totalReports++;
-      numbers.add(pn);
-      // Only count concrete spam categories toward "most common type".
-      if (r.is_spam && r.type) {
-        typeCounts[r.type] = (typeCounts[r.type] ?? 0) + 1;
-      }
-    }
-    if (data.length < PAGE) break;
-  }
-
-  const areaCodeCounts: Record<string, number> = {};
-  for (const n of numbers) {
-    const code = n.slice(0, 3);
-    areaCodeCounts[code] = (areaCodeCounts[code] ?? 0) + 1;
-  }
-
-  return deriveSiteStats(numbers.size, totalReports, typeCounts, areaCodeCounts);
 }
 
 export type TrendingNumber = {
@@ -483,32 +255,20 @@ export type TrendingNumber = {
 };
 
 // The most recently reported distinct spam numbers, newest first. Powers the
-// homepage "Trending this week" strip.
+// homepage "Trending this week" strip. 100 rows off the reports_recent index
+// gives good odds of `limit` distinct numbers without over-fetching.
 export async function getTrendingNumbers(limit = 5): Promise<TrendingNumber[]> {
-  // Already scoped (is_spam filter + needed columns only) rather than a full
-  // scan. 100 rows gives good odds of finding `limit` distinct numbers among
-  // recent reports without over-fetching.
-  const { data, error } = await supabaseAdmin
-    .from("spam_reports")
-    .select("phone_number, type, comment, created_at")
-    .eq("is_spam", true)
-    .eq("hidden", false)
-    .order("created_at", { ascending: false })
-    .limit(100);
-  if (error) throw dbError("getTrendingNumbers", error);
-
+  const rows = await all<{ phone: number; type: string | null; comment: string | null; created_at: string }>(
+    `SELECT phone, type, comment, created_at FROM reports
+     WHERE hidden = 0 AND is_spam = 1 ORDER BY created_at DESC LIMIT 100`
+  );
   const seen = new Set<string>();
   const out: TrendingNumber[] = [];
-  for (const r of data ?? []) {
-    const pn = r.phone_number as string | null;
-    if (!pn || pn.length !== 10 || seen.has(pn)) continue;
+  for (const r of rows) {
+    const pn = String(r.phone);
+    if (pn.length !== 10 || seen.has(pn)) continue;
     seen.add(pn);
-    out.push({
-      phone_number: pn,
-      type: r.type ?? null,
-      comment: r.comment ?? null,
-      created_at: r.created_at as string,
-    });
+    out.push({ phone_number: pn, type: r.type, comment: r.comment, created_at: r.created_at });
     if (out.length >= limit) break;
   }
   return out;

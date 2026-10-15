@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./supabase";
+import { all, first } from "./d1";
 import { regionForCode } from "./area-codes";
 import { provinceForAreaCode } from "./provinces";
 
@@ -35,8 +35,8 @@ export type MonthlyReport = {
   pctChange: number | null;
 };
 
-// The aggregates for one month, as materialized by refresh_monthly_reports()
-// (see the 20261015120000 migration). Province and region rollups happen here
+// The aggregates for one month, as materialized by refreshAll()
+// (src/lib/refresh.ts). Province and region rollups happen here
 // because the area-code -> province mapping lives in TypeScript.
 type MonthlyPayload = {
   total_numbers_all_time?: unknown;
@@ -67,16 +67,14 @@ function ymKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-// Months that have a materialized report, newest first. One read of a table
-// with a row per month. Throws on a database error: an empty list here would
-// drop every month from the index pages and the sitemap, and prerender none.
+// Months that have a materialized report, newest first: one row per month.
+// Throws on a database error: an empty list here would drop every month from
+// the index pages and the sitemap.
 export async function getReportableMonths(): Promise<{ year: number; month: number }[]> {
-  const { data, error } = await supabaseAdmin.rpc("get_reportable_months");
-  if (error) throw new Error(`get_reportable_months: ${error.message}`);
-  if (!Array.isArray(data)) return [];
+  const rows = await all<{ ym: string }>("SELECT ym FROM monthly_reports ORDER BY ym DESC");
   const months: { year: number; month: number }[] = [];
-  for (const ym of data as unknown[]) {
-    const m = typeof ym === "string" ? ym.match(/^(\d{4})-(\d{2})$/) : null;
+  for (const { ym } of rows) {
+    const m = ym.match(/^(\d{4})-(\d{2})$/);
     if (m) months.push({ year: Number(m[1]), month: Number(m[2]) });
   }
   return months;
@@ -94,12 +92,12 @@ export async function getMonthlyReport(
   year: number,
   month: number
 ): Promise<MonthlyReport | null> {
-  const { data, error } = await supabaseAdmin.rpc("get_monthly_report", {
-    p_ym: ymKey(year, month),
-  });
-  if (error) throw new Error(`get_monthly_report(${ymKey(year, month)}): ${error.message}`);
-  if (!data || typeof data !== "object") return null;
-  const d = data as MonthlyPayload;
+  const row = await first<{ payload: string }>(
+    "SELECT payload FROM monthly_reports WHERE ym = ?",
+    ymKey(year, month)
+  );
+  if (!row) return null;
+  const d = JSON.parse(row.payload) as MonthlyPayload;
 
   const monthNumbers = num(d.month_numbers);
   const monthReports = num(d.month_reports);

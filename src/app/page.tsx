@@ -5,7 +5,7 @@ import SloganRotator from "@/components/SloganRotator";
 import AdUnit from "@/components/AdUnit";
 import CanadaHeatmap from "@/components/CanadaHeatmap";
 import NewUiBanner from "@/components/app/NewUiBanner";
-import { supabaseAdmin } from "@/lib/supabase";
+import { all } from "@/lib/d1";
 import { formatPhone } from "@/lib/lookup";
 import { getSiteStats, getTrendingNumbers } from "@/lib/spam";
 import { regionForCode } from "@/lib/area-codes";
@@ -38,41 +38,30 @@ type RecentReport = {
 };
 
 async function getRecentReports(): Promise<RecentReport[]> {
-  // Filter on is_spam so this hits the same index as the "Trending" query. An
-  // unfiltered `order by created_at` is a full sort of the whole table, which
-  // loses to the DB contention created when the build prerenders hundreds of
-  // pages at once — that's what left this list empty ("No reports yet") even
-  // though the data was there. Retry a couple of times to ride out transient
-  // load, then throw: an empty list here is cached for an hour (and was once
-  // baked into a build), and a failed render keeps the last good homepage.
-  let lastError = "no rows returned";
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const { data, error } = await supabaseAdmin
-        .from("spam_reports")
-        .select("id, phone_number, type, comment, is_spam, created_at")
-        .eq("is_spam", true)
-        .eq("hidden", false)
-        .order("created_at", { ascending: false })
-        .limit(10);
-      if (error) {
-        lastError = error.message;
-        console.error(
-          `getRecentReports attempt ${attempt + 1} failed:`,
-          error.message
-        );
-      } else if (data && data.length > 0) {
-        return data;
-      }
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
-      console.error(`getRecentReports attempt ${attempt + 1} threw:`, e);
-    }
-    // Brief backoff before retrying.
-    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-  }
-  // The table is never empty in production, so zero rows is a failure too.
-  throw new Error(`getRecentReports: ${lastError}`);
+  // Ten rows off the reports_recent index (hidden = 0 AND is_spam = 1, newest
+  // first). Throws on a database error (src/lib/d1.ts), and on zero rows: the
+  // table is never empty in production, and an empty list here once got baked
+  // into a build and cached as "No reports yet".
+  const rows = await all<{
+    id: string;
+    phone: number;
+    type: string | null;
+    comment: string | null;
+    is_spam: number;
+    created_at: string;
+  }>(
+    `SELECT id, phone, type, comment, is_spam, created_at FROM reports
+     WHERE hidden = 0 AND is_spam = 1 ORDER BY created_at DESC LIMIT 10`
+  );
+  if (rows.length === 0) throw new Error("getRecentReports: no rows returned");
+  return rows.map((r) => ({
+    id: r.id,
+    phone_number: String(r.phone),
+    type: r.type,
+    comment: r.comment,
+    is_spam: r.is_spam === 1,
+    created_at: r.created_at,
+  }));
 }
 
 // Province labels are stored long ("Nova Scotia / PEI"); trim to something that

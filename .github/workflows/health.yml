@@ -1,10 +1,13 @@
-name: Health and egress guardrails
+name: Health and cost guardrails
 
-# The site has been taken down twice by an unbounded database read path. Those
-# regressions are invisible until egress has already been spent, so this asserts
-# the invariants in AGENTS.md directly, every day. A failed run emails the repo
-# owner — that is the alerting mechanism, since Supabase's usage alerts are
-# dashboard-only and have no Management API endpoint.
+# Asserts the invariants in AGENTS.md against the live site every day. A failed
+# run emails the repo owner — that is the alerting mechanism.
+#
+# On Supabase the cost that took the site down was egress; on Cloudflare D1 it
+# is rows read. The design rule is the same: a page render reads a bounded
+# number of rows that never grows with the data. The render-cost step checks
+# that bound directly, from the x-d1-rows-read header the Worker sets on every
+# response (worker.ts).
 
 on:
   schedule:
@@ -16,109 +19,56 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SITE: https://www.canadial.com
-      SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-      # Storage: 500 MB free-tier limit. Prune old ftc_dnc rows well before this.
-      MAX_DB_MB: '400'
-      # Rows scanned per day. Measured steady state is ~40M/day now that ~11.3k
-      # number pages are in the sitemap and being crawled (quiet-window sample,
-      # 2026-09-06); it was ~7M before. For scale, one get_site_stats() call
-      # scans ~673k rows and the homepage regenerates hourly. Alerting needs
-      # both the daily average and a live sample to breach — see below.
-      MAX_TUP_PER_DAY: '150000000'
-      # Core pages, ~723 area codes, and the ~11.3k number pages that are worth
-      # indexing (2+ reports, or a verified organization). The bound exists to
-      # catch a wholesale relisting of all ~307k number pages — that is what
-      # forced sitemap sharding and full-table scans — not to police growth, so
-      # it leaves plenty of room as more numbers pick up a second report.
-      # Google's own ceiling is 50,000 URLs per sitemap file.
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+      # D1 holds 10 GB per database. Phase 2's FTC aggregates are the growth.
+      MAX_DB_MB: '6000'
+      # Rows read by one number-page render. Measured 2-7 (lookup: org, number
+      # counters, 5 latest reports; area summary by primary key). Anything far
+      # above that is a read that scales with the data.
+      MAX_ROWS_PER_RENDER: '50'
+      # Daily rollups must have run within this window.
+      MAX_ROLLUP_AGE_HOURS: '36'
+      # Core pages, area codes and the number pages worth indexing. The bound
+      # catches a wholesale relisting of every number page, not growth.
       MAX_SITEMAP_URLS: '30000'
     steps:
-      - name: Storage and scan volume
+      - name: Database size and rollup freshness
         run: |
-          snap=$(curl -fsS -X POST \
-            -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
-            -H "Content-Type: application/json" -d '{}' \
-            "$SUPABASE_URL/rest/v1/rpc/record_usage_snapshot")
-          echo "$snap"
-          db_mb=$(echo "$snap"  | python3 -c 'import sys,json;print(json.load(sys.stdin)["db_mb"])')
-          tup=$(echo "$snap"    | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_per_day"] or 0)')
-          prev=$(echo "$snap"   | python3 -c 'import sys,json;print(json.load(sys.stdin)["prev_tup_per_day"] or 0)')
-          echo "storage: ${db_mb} MB / ${MAX_DB_MB} MB"
-          echo "scanned: ${tup} rows/day (previous interval: ${prev}) / ${MAX_TUP_PER_DAY}"
-          python3 -c "import sys; sys.exit(0 if float('$db_mb') < float('$MAX_DB_MB') else 1)" \
-            || { echo "::error::Storage ${db_mb} MB is over ${MAX_DB_MB} MB. Prune old source='ftc_dnc' rows."; exit 1; }
-          # The daily average alone can't tell a regression from a busy day. It
-          # has false-alarmed twice: 1.54 billion rows/day once and 1.45 billion
-          # the next, both entirely migrations, builds, VACUUMs and a
-          # post-deploy crawl burst. Quiet-window samples minutes later were
-          # 7.2M and 40.6M.
-          #
-          # So alerting needs two things to be true at once: the 24h average is
-          # over budget (sustained cost) *and* it is still happening right now
-          # (a live sample). Maintenance and bursts fail the second test because
-          # they are over by the time this runs; a page path that scans the
-          # table fails both, because page renders never stop.
-          if python3 -c "import sys; sys.exit(0 if float('$tup') >= float('$MAX_TUP_PER_DAY') else 1)"; then
-            echo "24h average is over budget; taking a live sample to see if it is still happening."
-            t1=$(echo "$snap" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_returned"])')
-            sleep 180
-            snap2=$(curl -fsS -X POST \
-              -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
-              -H "Content-Type: application/json" -d '{}' \
-              "$SUPABASE_URL/rest/v1/rpc/record_usage_snapshot")
-            t2=$(echo "$snap2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tup_returned"])')
-            live=$(python3 -c "print(int(($t2 - $t1) * 86400 / 180))")
-            echo "live sample: ${live} rows/day"
-            if python3 -c "import sys; sys.exit(0 if float('$live') >= float('$MAX_TUP_PER_DAY') else 1)"; then
-              echo "::error::${tup} rows/day over 24h and ${live} rows/day right now. Something is reading the whole table — see AGENTS.md."
-              exit 1
-            fi
-            echo "::warning::${tup} rows/day over 24h, but only ${live} rows/day right now (previous interval ${prev}). Reads as maintenance or a crawl burst, not a regression."
-          fi
+          h=$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$SITE/api/admin/health")
+          echo "$h"
+          python3 - "$h" <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          h = json.loads(sys.argv[1])
+          mb = (h.get("db_bytes") or 0) / 1e6
+          print(f"database: {mb:.0f} MB / {os.environ['MAX_DB_MB']} MB")
+          if mb >= float(os.environ["MAX_DB_MB"]):
+              print(f"::error::D1 database is {mb:.0f} MB"); sys.exit(1)
+          limit = float(os.environ["MAX_ROLLUP_AGE_HOURS"])
+          for k in ("site_stats", "area_summaries_oldest", "monthly_reports"):
+              t = h.get(k)
+              age = (datetime.now(timezone.utc) - datetime.fromisoformat(t.replace("Z", "+00:00"))).total_seconds() / 3600 if t else None
+              print(f"{k}: {t} ({age:.1f} h old)" if age is not None else f"{k}: missing")
+              if age is None or age > limit:
+                  print(f"::error::{k} is stale or missing; the daily refresh is not running"); sys.exit(1)
+          PY
 
-      - name: Database is not publicly readable
-        run: |
-          for table in spam_reports organizations; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' \
-              -H "apikey: $ANON_KEY" -H "Authorization: Bearer $ANON_KEY" \
-              "$SUPABASE_URL/rest/v1/$table?select=*&limit=1")
-            echo "anon -> $table: $code"
-            case "$code" in
-              401|403|404) ;;
-              *) echo "::error::anon key can read $table (HTTP $code). Anyone could page the table straight through PostgREST."; exit 1 ;;
-            esac
-          done
-
-      - name: Number pages are cached
+      - name: Number pages are bounded and edge-cached
         run: |
           url="$SITE/lookup/4164428848"
           hdr=$(curl -sI "$url" | tr -d '\r')
+          rows=$(echo "$hdr" | awk -F': ' 'tolower($1)=="x-d1-rows-read"{print $2}')
           cc=$(echo "$hdr" | awk -F': ' 'tolower($1)=="cache-control"{print $2}')
-          echo "cache-control: $cc"
-          # The deterministic signal. A route with `revalidate` but no
-          # generateStaticParams is fully dynamic and Next sends no-store; an
-          # ISR route sends must-revalidate. This does not depend on whether a
-          # particular edge node happens to hold the page yet.
-          case "$cc" in
-            *no-store*) echo "::error::Number pages send no-store; every request re-renders and re-queries. A dynamic route needs generateStaticParams for revalidate to apply — see AGENTS.md."; exit 1 ;;
-          esac
-          # x-vercel-cache is a useful confirmation but inherently racy: right
-          # after a deploy the cache is cold, and the warming request and the
-          # check can land on different edge nodes. It false-failed once that
-          # way. Retry, then warn rather than fail — the assertion above already
-          # catches the regression this step exists for.
-          for i in 1 2 3 4 5; do
-            cache=$(curl -sI "$url" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-vercel-cache"{print $2}')
-            echo "attempt $i: x-vercel-cache=$cache"
-            case "$cache" in HIT|PRERENDER|STALE|REVALIDATED) break ;; esac
-            sleep 5
-          done
-          case "$cache" in
-            HIT|PRERENDER|STALE|REVALIDATED) ;;
-            *) echo "::warning::Number page still shows x-vercel-cache=$cache after 5 tries. Expected right after a deploy; investigate if it persists." ;;
-          esac
+          echo "rows read per render: $rows (max $MAX_ROWS_PER_RENDER); cache-control: $cc"
+          [ -n "$rows" ] || { echo "::error::No x-d1-rows-read header; is worker.ts still the entry point?"; exit 1; }
+          [ "$rows" -le "$MAX_ROWS_PER_RENDER" ] \
+            || { echo "::error::A number page read $rows D1 rows. Some read now scales with the data — see AGENTS.md."; exit 1; }
+          # GET twice: the second should come from the colo's edge cache. Warn
+          # only — two requests can land on different colos.
+          curl -s -o /dev/null "$url"
+          edge=$(curl -s -o /dev/null -D - "$url" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-edge-cache"{print $2}')
+          echo "x-edge-cache on repeat: $edge"
+          [ "$edge" = "HIT" ] || echo "::warning::Repeat request was not an edge-cache HIT ($edge)."
 
       - name: Crawl surface is bounded
         run: |
@@ -126,17 +76,15 @@ jobs:
           n=$(grep -c '<loc>' /tmp/sitemap.xml)
           echo "sitemap URLs: $n / $MAX_SITEMAP_URLS"
           [ "$n" -lt "$MAX_SITEMAP_URLS" ] \
-            || { echo "::error::sitemap.xml lists $n URLs. Individual number pages must not be listed — that is what forced sharding and full-table scans."; exit 1; }
-          # A NANP area code never starts with 0 or 1. These reappear whenever a
-          # code path skips the area-code filter — it has happened once already,
-          # via the getAreaCodeCounts fallback.
+            || { echo "::error::sitemap.xml lists $n URLs."; exit 1; }
+          # A NANP area code never starts with 0 or 1.
           bad=$(grep -oE '/area/[0-9]{3}' /tmp/sitemap.xml | sed 's|/area/||' | grep -cE '^[01]' || true)
           echo "impossible area codes: $bad"
           [ "$bad" -eq 0 ] \
-            || { echo "::error::sitemap.xml lists $bad impossible area codes (leading 0 or 1). Some path is skipping isValidAreaCode()."; exit 1; }
+            || { echo "::error::sitemap.xml lists $bad impossible area codes (leading 0 or 1)."; exit 1; }
           # /app is a parallel UI and is noindex; it must never be advertised here.
           grep -q '/app' /tmp/sitemap.xml \
-            && { echo "::error::sitemap.xml contains /app URLs. The parallel UI must stay out of the index."; exit 1; } || true
+            && { echo "::error::sitemap.xml contains /app URLs."; exit 1; } || true
 
       - name: Site is serving real data
         run: |

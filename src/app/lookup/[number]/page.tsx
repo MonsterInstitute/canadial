@@ -16,25 +16,12 @@ import { SITE_NAME, SITE_URL } from "@/lib/config";
 import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 
-// Cache each number page and regenerate weekly — keeps crawls (and egress
-// across ~336k number pages) cheap. Weekly, not daily: the page only changes
-// when a report lands, and every writer of reports revalidates this page on
-// the spot: submitReport() in ./actions.ts, the admin moderation route, and
-// the daily import (via /api/admin/revalidate, scripts/revalidate_pages.py).
-// Only the area-code context below it can lag by up to a week.
-export const revalidate = 604800;
-
-// Required for `revalidate` to actually apply. Without a generateStaticParams
-// export, Next treats this route as fully dynamic and re-renders it on every
-// single request — `revalidate` is silently ignored (see
-// node_modules/next/dist/docs/.../generate-static-params.md: "You must return
-// an empty array from generateStaticParams ... in order to revalidate (ISR)
-// paths at runtime"). That was costing ~100+ rows of egress per crawler hit,
-// across every number page. Returning [] prerenders nothing at build time but
-// makes each page ISR-cached on first request.
-export function generateStaticParams() {
-  return [];
-}
+// Rendered on demand from D1 and cached at Cloudflare's edge by worker.ts,
+// not ISR. There are ~336k number pages (millions after the FTC backfill),
+// most visited once by a crawler: as ISR each first visit is a cache write and
+// an R2 object, while a render here is three bounded D1 reads (see
+// lookupPhone and getAreaSummary) and the edge cache is free.
+export const dynamic = "force-dynamic";
 
 // generateMetadata and the page render both need the lookup; cache() dedupes
 // them into a single DB call per request.

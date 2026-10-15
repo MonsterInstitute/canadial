@@ -49,3 +49,6 @@ import_orgs.py
 # Python
 __pycache__/
 *.pyc
+.open-next
+.wrangler
+.dev.vars

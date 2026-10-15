@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getReportableMonths } from "@/lib/reports";
-import { REPORTS_CONTENT, getLocale, interp } from "@/lib/i18n";
+import { REPORTS_CONTENT, getLocale, interp, localizedMonth } from "@/lib/i18n";
 
 export const revalidate = 604800; // weekly — matches src/app/reports/page.tsx
 
@@ -15,14 +15,6 @@ type Props = { params: Promise<{ lang: string }> };
 function isSupported(lang: string) {
   const l = getLocale(lang);
   return !!l && l.code !== "en" && !!REPORTS_CONTENT[lang];
-}
-
-function localizedMonth(year: number, month: number, htmlLang: string): string {
-  return new Intl.DateTimeFormat(htmlLang, {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, month - 1, 1)));
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {

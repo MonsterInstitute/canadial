@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "canadial",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-15",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "canadial" }],
+  "observability": { "enabled": true },
+  // Only the custom domains serve the site: no *.workers.dev or preview URLs,
+  // which would be unprotected duplicates of it.
+  "workers_dev": false,
+  "preview_urls": false,
+  // canadial.com 308s to www in worker.ts. next.canadial.com was the staging
+  // host (noindex); kept through the rollback window.
+  "routes": [
+    { "pattern": "www.canadial.com", "custom_domain": true },
+    { "pattern": "canadial.com", "custom_domain": true },
+    { "pattern": "next.canadial.com", "custom_domain": true }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "migrations_dir": "migrations" },
+    // OpenNext tag cache for revalidatePath(); kept apart from app data.
+    { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-tags", "database_id": "293d8ecd-c499-4061-b4cf-deb63a541b03" }
+  ],
+  "r2_buckets": [{ "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-opennext-cache" }],
+  "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
+  "env": {
+    // Used only by `next build` (see next.config.ts): pages prerendered at build
+    // time read the production database, as Vercel builds read Supabase. Local
+    // `next dev` uses the default (local) bindings and never touches production.
+    "build": {
+      "routes": [],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "remote": true }
+      ]
+    }
+  }
+}

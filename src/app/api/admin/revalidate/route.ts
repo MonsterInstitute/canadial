@@ -2,6 +2,7 @@ import { timingSafeEqual } from "crypto";
 import { revalidatePath } from "next/cache";
 import { REPORTS_CONTENT } from "@/lib/i18n";
 import { isValidAreaCode } from "@/lib/phone";
+import { purgeNumberPages } from "@/lib/edge-cache";
 
 // Revalidation endpoint for writers that run outside the app — the daily
 // import in .github/workflows/daily-import.yml (scripts/revalidate_pages.py).
@@ -86,7 +87,15 @@ export async function POST(req: Request) {
     if (targets.length === 0) skipped.push(path);
     for (const t of targets) revalidated.add(t);
   }
-  for (const t of revalidated) revalidatePath(t);
+  // Number pages aren't ISR any more — they render on demand and are cached at
+  // the edge by worker.ts — so for them "revalidate" means an edge purge.
+  const numbers: string[] = [];
+  for (const t of revalidated) {
+    const m = t.match(/^\/lookup\/(\d{10})$/);
+    if (m) numbers.push(m[1]);
+    else revalidatePath(t);
+  }
+  await purgeNumberPages(numbers, new URL(req.url).origin);
 
   return json(200, { revalidated: revalidated.size, skipped });
 }

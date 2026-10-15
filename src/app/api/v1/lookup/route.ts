@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { first, run } from "@/lib/d1";
 import { normalizePhone } from "@/lib/phone";
 import { lookupPhone } from "@/lib/lookup";
 
@@ -45,33 +45,31 @@ export async function GET(req: Request) {
   const key = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   if (!key) return json(401, { error: "Missing API key. Use 'Authorization: Bearer <key>'." });
 
-  const { data: keyRow, error: keyErr } = await supabaseAdmin
-    .from("api_keys")
-    .select("id, monthly_limit, usage_count, usage_reset_at, is_active")
-    .eq("key", key)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  // A database error is ours, not the caller's: 503, not "invalid key".
-  if (keyErr) {
-    console.error("api/v1/lookup key check failed:", keyErr.message);
+  let row: ApiKey | null;
+  try {
+    row = await first<ApiKey>(
+      `SELECT id, monthly_limit, usage_count, usage_reset_at, is_active
+       FROM api_keys WHERE key = ? AND is_active = 1`,
+      key
+    );
+  } catch (e) {
+    // A database error is ours, not the caller's: 503, not "invalid key".
+    console.error("api/v1/lookup key check failed:", e);
     return json(503, { error: "Lookup is temporarily unavailable." }, { "Retry-After": "300" });
   }
-  if (!keyRow) return json(401, { error: "Invalid or inactive API key." });
-  const row = keyRow as ApiKey;
+  if (!row) return json(401, { error: "Invalid or inactive API key." });
 
-  // 2. Rate limit (reset the window if it has elapsed)
+  // 2. Rate limit (reset the window if it has elapsed). usage_reset_at is a
+  //    UTC "YYYY-MM-DDTHH:MM:SS[.fff]" string, as Supabase stored it.
   let usage = row.usage_count;
-  const now = new Date();
-  if (row.usage_reset_at && new Date(row.usage_reset_at) < now) {
+  if (row.usage_reset_at && new Date(row.usage_reset_at + "Z") < new Date()) {
     usage = 0;
-    await supabaseAdmin
-      .from("api_keys")
-      .update({
-        usage_count: 0,
-        usage_reset_at: new Date(now.getTime() + 30 * 86_400_000).toISOString(),
-      })
-      .eq("id", row.id);
+    await run(
+      `UPDATE api_keys SET usage_count = 0,
+         usage_reset_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+30 days')
+       WHERE id = ?`,
+      [row.id]
+    );
   }
   if (usage >= row.monthly_limit) {
     return json(
@@ -97,8 +95,9 @@ export async function GET(req: Request) {
     return json(503, { error: "Lookup is temporarily unavailable." }, { "Retry-After": "300" });
   }
 
-  // 5. Count this request (best-effort; not strictly atomic).
-  await supabaseAdmin.from("api_keys").update({ usage_count: usage + 1 }).eq("id", row.id);
+  // 5. Count this request. An atomic increment, so concurrent requests can't
+  //    overwrite each other's counts (the Supabase version read then wrote).
+  await run("UPDATE api_keys SET usage_count = usage_count + 1 WHERE id = ?", [row.id]);
   const remaining = Math.max(0, row.monthly_limit - (usage + 1));
   const rlHeaders = {
     "X-RateLimit-Limit": String(row.monthly_limit),

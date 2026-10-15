@@ -663,3 +663,17 @@ export const REPORTS_CONTENT: Record<string, ReportsContent> = {
   vi: { indexTitle: "Báo cáo cuộc gọi rác tại Canada", indexIntro: "Tóm tắt hằng tháng về xu hướng cuộc gọi rác, lừa đảo và robocall trên khắp Canada.", reportTitle: "Báo cáo cuộc gọi rác Canada — [month]", heroLine: "[count] số rác được báo cáo trên khắp Canada.", statNumbers: "Số trong cơ sở dữ liệu", statTopType: "Loại lừa đảo phổ biến nhất", statTopProvince: "Tỉnh bị nhắm đến nhiều nhất", statNew: "Số mới trong tháng", secTypes: "Phân tích theo loại cuộc gọi", secAreaCodes: "10 mã vùng được báo cáo nhiều nhất", secProvinces: "Phân tích theo tỉnh", secTopNumbers: "Số được báo cáo nhiều nhất tháng này", secMeaning: "Điều này có nghĩa là gì", secMethodology: "Phương pháp", thAreaCode: "Mã vùng", thRegion: "Khu vực", thNumbers: "Số", thProvince: "Tỉnh / khu vực", thShare: "Tỷ lệ", reportsUnit: "báo cáo", baseline: "Đây là báo cáo đầu tiên — chưa có tháng trước để so sánh.", meaning: "Trong [month], Canadial đã ghi nhận [count] số được báo cáo trên khắp Canada. Loại được báo cáo nhiều nhất là [type], và hoạt động tập trung nhất ở [province].", methodology: "Số liệu lấy từ báo cáo cộng đồng trên Canadial.com. Các số được nhóm theo mã vùng. Cập nhật hằng tháng.", ctaText: "Nhận cuộc gọi đáng ngờ? Báo cáo để bảo vệ những người Canada khác.", ctaButton: "Báo cáo số rác", backLabel: "Tất cả báo cáo" },
 };
 
+
+// "October 2026" in a locale, for the translated monthly reports. Workers'
+// Intl data lacks Punjabi month names (it renders "2026 M10"), so Punjabi uses
+// the exact strings full ICU produces, as the site rendered them on Node.
+const PA_MONTHS = ["ਜਨਵਰੀ", "ਫ਼ਰਵਰੀ", "ਮਾਰਚ", "ਅਪ੍ਰੈਲ", "ਮਈ", "ਜੂਨ", "ਜੁਲਾਈ", "ਅਗਸਤ", "ਸਤੰਬਰ", "ਅਕਤੂਬਰ", "ਨਵੰਬਰ", "ਦਸੰਬਰ"];
+
+export function localizedMonth(year: number, month: number, htmlLang: string): string {
+  if (htmlLang === "pa") return `${PA_MONTHS[month - 1]} ${year}`;
+  return new Intl.DateTimeFormat(htmlLang, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
