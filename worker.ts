@@ -113,10 +113,13 @@ async function serve(request: Request, url: URL, env: unknown, ctx: ExecutionCon
     return render(request, env, ctx);
   }
 
-  // Key on the path alone: query strings would let anyone mint unlimited
-  // cache misses (each a render and D1 reads) for the same page. Safe only
-  // because RSC requests never get here and only HTML is ever stored.
-  const key = new Request(`${url.origin}${url.pathname}`, { method: "GET" });
+  // Key on the path plus the deployment version: no query string (it would
+  // let anyone mint unlimited cache misses, each a render and D1 reads), and
+  // a new deploy starts with an empty cache instead of serving pages rendered
+  // by the old code (a purge alone races the rollout). Safe only because RSC
+  // requests never get here and only HTML is ever stored.
+  const version = (env as { CF_VERSION_METADATA?: { id: string } }).CF_VERSION_METADATA?.id ?? "dev";
+  const key = new Request(`${url.origin}${url.pathname}?v=${version}`, { method: "GET" });
   const cache = (caches as unknown as { default: Cache }).default;
   const hit = await cache.match(key);
   if (hit && isHtml(hit)) {

@@ -20,7 +20,12 @@ const TOLL_FREE = new Set([800, 833, 844, 855, 866, 877, 888]);
 export type Block = {
   country: "CA" | "US";
   region: string | null;
+  // A proper place name: CNAC's exchange area for Canada; for the US, the
+  // Census place whose name exactly matches NANPA's rate centre (null if none).
   city: string | null;
+  // NANPA's raw rate centre when no reliable place name exists ("WARRENVL").
+  // Shown labelled as a rate centre, never as a city or in titles.
+  rateCentre: string | null;
   carrier: string | null;
   source: "CNAC" | "NANPA";
   asOf: string;
@@ -93,10 +98,6 @@ function displayCase(s: string): string {
     .join(" ");
 }
 
-function titleCase(s: string): string {
-  return s.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase());
-}
-
 export async function loadNumber(phone: string): Promise<NumberData> {
   const n = normalizePhone(phone);
   const key = Number(n);
@@ -105,7 +106,7 @@ export async function loadNumber(phone: string): Promise<NumberData> {
 
   type Org = NonNullable<NumberData["org"]>;
   type Num = { ftc_total: number; ftc_robocall: number; ftc_first: number | null; ftc_last: number | null; c_total: number; c_last: string | null; c_top_type: string | null; c_types: string | null };
-  type Blk = { country: "CA" | "US"; region: string | null; rate_center: string | null; carrier: string | null; source: "CNAC" | "NANPA"; as_of: string; status: string };
+  type Blk = { country: "CA" | "US"; region: string | null; rate_center: string | null; place: string | null; carrier: string | null; source: "CNAC" | "NANPA"; as_of: string; status: string };
   type BlkX = { status: string; carrier: string | null };
 
   const [orgs, nums, monthly, states, subjects, reports, blocks, xblocks, neighbours, latest, npaRows] = await batch<
@@ -121,7 +122,12 @@ export async function loadNumber(phone: string): Promise<NumberData> {
             WHERE phone = ? AND hidden = 0 AND source IS NOT 'ftc_dnc' ORDER BY created_at DESC LIMIT 5`,
       params: [key],
     },
-    { sql: "SELECT country, region, rate_center, carrier, source, as_of, status FROM number_blocks WHERE npanxx = ?", params: [npanxx] },
+    {
+      sql: `SELECT b.country, b.region, b.rate_center, r.name AS place, b.carrier, b.source, b.as_of, b.status
+            FROM number_blocks b LEFT JOIN rate_center_names r ON r.state = b.region AND r.rate_center = b.rate_center
+            WHERE b.npanxx = ?`,
+      params: [npanxx],
+    },
     { sql: "SELECT status, carrier FROM number_blocks_x WHERE npanxxx = ?", params: [Math.floor(key / 1000)] },
     {
       // Must match the numbers_by_block index expressions exactly.
@@ -160,15 +166,16 @@ export async function loadNumber(phone: string): Promise<NumberData> {
   const b = blocks[0];
   const npaKnown = npaRows[0];
   if (!b && npaKnown && !TOLL_FREE.has(npa)) {
-    block = { country: npaKnown.country, region: null, city: null, carrier: null, source: npaKnown.source, asOf: npaKnown.as_of, status: "unassigned" };
+    block = { country: npaKnown.country, region: null, city: null, rateCentre: null, carrier: null, source: npaKnown.source, asOf: npaKnown.as_of, status: "unassigned" };
   } else if (b) {
     const x = xblocks[0];
     const unassigned = b.status !== "assigned" || x?.status === "available";
-    const city = b.rate_center ? (b.country === "US" ? titleCase(b.rate_center) : b.rate_center) : null;
+    const city = b.country === "CA" ? b.rate_center : b.place;
     block = {
       country: b.country,
       region: b.region,
       city,
+      rateCentre: !city && b.country === "US" ? b.rate_center : null,
       carrier: unassigned ? null : carrierLabel(x?.carrier ?? b.carrier),
       source: b.source,
       asOf: b.as_of,
@@ -270,9 +277,12 @@ export function countPhrase(ftc: number, community: number): string {
   return `${nf} complaints and reports`;
 }
 
+// "City, Province/State" when a reliable place name exists, otherwise null:
+// never a bare state, and never a raw rate-centre abbreviation (those are
+// shown in the body, labelled, via block.rateCentre).
 export function placeLabel(d: NumberData): string | null {
-  if (!d.block || d.block.status !== "assigned") return null;
-  return [d.block.city, d.block.region].filter(Boolean).join(", ") || null;
+  if (!d.block || d.block.status !== "assigned" || !d.block.city) return null;
+  return [d.block.city, d.block.region].filter(Boolean).join(", ");
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

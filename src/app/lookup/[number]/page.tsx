@@ -177,8 +177,9 @@ function buildFaq(d: NumberData, pretty: string, v: Verdict): { q: string; a: st
     faq.push({ q: `Who owns ${pretty}?`, a: `${pretty} is listed as ${d.org.name}${d.org.department ? `, ${d.org.department}` : ""}.` });
   } else if (d.block?.status === "unassigned") {
     faq.push({ q: `Who called me from ${pretty}?`, a: `Nobody can have this number as a working line: its block isn't assigned to any phone carrier (${d.block.source}, ${formatDate(d.block.asOf)}). Callers showing it were most likely spoofing their caller ID.` });
-  } else if (d.block?.carrier || place) {
-    faq.push({ q: `Who called me from ${pretty}?`, a: `The number belongs to a block assigned to ${d.block?.carrier ?? "a carrier"}${place ? ` in ${place}` : ""} (${d.block?.source}, ${formatDate(d.block!.asOf)}). Numbers can move between carriers, so the caller's provider may differ.` });
+  } else if (d.block?.carrier || place || d.block?.rateCentre) {
+    const where = place ? ` in ${place}` : d.block?.rateCentre ? ` (rate centre ${d.block.rateCentre}${d.block.region ? `, ${d.block.region}` : ""})` : "";
+    faq.push({ q: `Who called me from ${pretty}?`, a: `The number belongs to a block assigned to ${d.block?.carrier ?? "a carrier"}${where} (${d.block?.source}, ${formatDate(d.block!.asOf)}). Numbers can move between carriers, so the caller's provider may differ.` });
   }
   const total = d.ftc.total + d.community.total;
   if (total > 0) {
@@ -284,6 +285,7 @@ export default async function NumberPage({ params }: Props) {
         ) : d.block ? (
           <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
             {place && <div><dt className="text-zinc-500">Location of the number block</dt><dd className="font-medium">{place}{d.block.country === "CA" ? ", Canada" : ", USA"}</dd></div>}
+            {!place && d.block.rateCentre && <div><dt className="text-zinc-500">Rate centre (NANPA abbreviation)</dt><dd className="font-medium">{d.block.rateCentre}{d.block.region ? `, ${d.block.region}` : ""}, USA</dd></div>}
             {d.block.carrier && <div><dt className="text-zinc-500">Block assigned to</dt><dd className="font-medium">{d.block.carrier}</dd></div>}
             <p className="text-xs text-zinc-500 sm:col-span-2">
               From {d.block.source === "CNAC" ? "the Canadian Numbering Administrator" : "the North American Numbering Plan Administrator"} ({formatDate(d.block.asOf)}). This is who the number block was assigned to; numbers can be moved between carriers, and caller IDs can be faked.

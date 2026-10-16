@@ -19,7 +19,14 @@ function parse(code: string, nxx: string): number | null {
   return Number(code) * 1000 + Number(nxx);
 }
 
-const title = (s: string) => s.toLowerCase().replace(/\b([a-z])/g, (c) => c.toUpperCase());
+// A proper place name: CNAC's exchange area (Canada) or the Census match for
+// NANPA's rate centre (US). Unmatched US rate centres are shown separately,
+// labelled, never as a city.
+type BlockRow = NonNullable<Awaited<ReturnType<typeof getBlock>>["block"]>;
+const placeOf = (b: BlockRow | null) => {
+  const city = b ? (b.country === "CA" ? b.rate_center : b.place) : null;
+  return city ? `${city}, ${b!.region}` : null;
+};
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { code, nxx } = await params;
@@ -27,7 +34,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   if (!key) return {};
   const { block, numbers } = await load(key);
   if (!block && !numbers.length) return {};
-  const place = block?.rate_center ? `${block.country === "US" ? title(block.rate_center) : block.rate_center}, ${block.region}` : null;
+  const place = placeOf(block);
   const carrier = carrierLabel(block?.carrier ?? null);
   return {
     title: `${code}-${nxx} phone numbers${place ? ` — ${place}` : ""}`,
@@ -45,7 +52,8 @@ export default async function BlockPage({ params }: Props) {
   if (!key) notFound();
   const { block, xblocks, numbers } = await load(key);
   if (!block && !numbers.length) notFound();
-  const place = block?.rate_center ? `${block.country === "US" ? title(block.rate_center) : block.rate_center}, ${block.region}` : null;
+  const place = placeOf(block);
+  const rateCentre = !place && block?.country === "US" && block.rate_center ? `${block.rate_center}, ${block.region}` : null;
   const carrier = carrierLabel(block?.carrier ?? null);
   const pooledOthers = xblocks.filter((x) => x.status === "assigned");
   const unassignedX = xblocks.filter((x) => x.status === "available").map((x) => `${code}-${nxx}-${x.npanxxx % 10}xxx`);
@@ -57,7 +65,7 @@ export default async function BlockPage({ params }: Props) {
       {block?.status === "assigned" ? (
         <p className="mt-2 text-zinc-700">
           Numbers {code}-{nxx}-0000 to {code}-{nxx}-9999 are assigned to <strong>{carrier ?? "a carrier"}</strong>
-          {place ? <> in <strong>{place}</strong></> : null}.
+          {place ? <> in <strong>{place}</strong></> : rateCentre ? <> (rate centre <strong>{rateCentre}</strong>, NANPA abbreviation)</> : null}.
           {pooledOthers.length > 0 && ` ${pooledOthers.length} of its ten thousand-number blocks are assigned to other carriers (number pooling).`}
         </p>
       ) : (

@@ -7,6 +7,9 @@
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
   "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "canadial" }],
   "observability": { "enabled": true },
+  // The deployment's version id, part of the edge-cache key in worker.ts so a
+  // new deploy never serves HTML cached by an older one.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Only the custom domains serve the site: no *.workers.dev or preview URLs,
   // which would be unprotected duplicates of it.
   "workers_dev": false,
@@ -52,7 +55,8 @@
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
       "workers_dev": false,
       "preview_urls": false,
-      "observability": { "enabled": true }
+      "observability": { "enabled": true },
+      "version_metadata": { "binding": "CF_VERSION_METADATA" }
     },
     // Used only by `next build` (see next.config.ts): pages prerendered at build
     // time read the production database, as Vercel builds read Supabase. Local

@@ -17,14 +17,16 @@ const PURGE_BATCH = 30; // URLs per purge call allowed on every plan
 // `origin` is the host the triggering request came in on, so its colo copy is
 // cleared even on a hostname not listed above (local wrangler dev).
 export async function purgeNumberPages(phones: string[], origin?: string): Promise<void> {
+  const { env } = await getCloudflareContext({ async: true });
+  // worker.ts keys cached pages on path + deployment version; purge that key.
+  const version = (env as { CF_VERSION_METADATA?: { id: string } }).CF_VERSION_METADATA?.id ?? "dev";
   const hosts = origin && !HOSTS.includes(origin) ? [...HOSTS, origin] : HOSTS;
-  const urls = phones.flatMap((p) => hosts.map((h) => `${h}/lookup/${p}`));
+  const urls = phones.flatMap((p) => hosts.map((h) => `${h}/lookup/${p}?v=${version}`));
   if (urls.length === 0) return;
 
   const cache = (globalThis as unknown as { caches?: { default?: Cache } }).caches?.default;
   if (cache) await Promise.all(urls.map((u) => cache.delete(new Request(u)).catch(() => false)));
 
-  const { env } = await getCloudflareContext({ async: true });
   const { CACHE_PURGE_API_TOKEN: token, CACHE_PURGE_ZONE_ID: zone } = env as {
     CACHE_PURGE_API_TOKEN?: string;
     CACHE_PURGE_ZONE_ID?: string;

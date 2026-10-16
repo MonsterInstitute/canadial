@@ -37,12 +37,17 @@ export async function getTrending() {
 export async function getBlock(npanxx: number) {
   const [blocks, xblocks, numbers] = await batch<
     [
-      { country: string; region: string | null; rate_center: string | null; carrier: string | null; status: string; pooled: number; source: string; as_of: string },
+      { country: string; region: string | null; rate_center: string | null; place: string | null; carrier: string | null; status: string; pooled: number; source: string; as_of: string },
       { npanxxx: number; status: string; carrier: string | null },
       { phone: number; ftc_total: number; c_total: number }
     ]
   >([
-    { sql: "SELECT country, region, rate_center, carrier, status, pooled, source, as_of FROM number_blocks WHERE npanxx = ?", params: [npanxx] },
+    {
+      sql: `SELECT b.country, b.region, b.rate_center, r.name AS place, b.carrier, b.status, b.pooled, b.source, b.as_of
+            FROM number_blocks b LEFT JOIN rate_center_names r ON r.state = b.region AND r.rate_center = b.rate_center
+            WHERE b.npanxx = ?`,
+      params: [npanxx],
+    },
     { sql: "SELECT npanxxx, status, carrier FROM number_blocks_x WHERE npanxxx BETWEEN ? AND ? ORDER BY npanxxx", params: [npanxx * 10, npanxx * 10 + 9] },
     {
       // Must match the numbers_by_block index expressions exactly.
