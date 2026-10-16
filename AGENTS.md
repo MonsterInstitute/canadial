@@ -129,6 +129,19 @@ The old one-row-per-number FTC rows (`reports.source = 'ftc_dnc'`) still back
 the current number pages; they are deleted when the pages switch to the
 aggregates (Phase 4), never counted alongside them.
 
+## Number-block data
+
+`number_blocks` (one row per NPA-NXX) and `number_blocks_x` (US thousands-
+blocks that differ from their code holder, or are unassigned) come from CNAC's
+CO Code Status (Canada) and NANPA's CO code and thousands-block assignment
+records (US). Raw zips live in `r2://canadial-data/blocks/raw/<date>/`;
+`scripts/blocks_build.py` turns them into SQL that replaces both tables. A row
+is the carrier the *block* was assigned to; with number portability a number
+may since have moved, so pages say "assigned to", never "this number's
+carrier". Neither source states a licence; pages attribute both by name and
+date. Refresh monthly: download the four zips, store them in R2 under the new
+date, run the builder, execute its SQL with `wrangler d1 execute --remote`.
+
 ## Watch
 
 `.github/workflows/health.yml` asserts these invariants daily (failure emails
