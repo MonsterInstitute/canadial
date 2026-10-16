@@ -70,6 +70,27 @@ jobs:
           echo "x-edge-cache on repeat: $edge"
           [ "$edge" = "HIT" ] || echo "::warning::Repeat request was not an edge-cache HIT ($edge)."
 
+      # A number page must always be HTML with the AdSense tag. In October
+      # 2026 the edge cache stored an RSC flight payload (a client-side
+      # navigation request) under a number page's key and served it to every
+      # visitor as text/x-component. Reproduce that sequence — RSC request
+      # first, then a plain load — and check what a visitor gets.
+      - name: Number pages are HTML, never an RSC payload
+        run: |
+          fail=0
+          for n in $(curl -fsS "$SITE/sitemap.xml" | grep -oE '/lookup/[0-9]{10}' | awk 'NR % 1500 == 1' | head -8 | cut -d/ -f3) 4164428848; do
+            curl -s -o /dev/null -H 'RSC: 1' -H 'Next-Router-Prefetch: 1' "$SITE/lookup/$n"
+            curl -s -o /dev/null "$SITE/lookup/$n?_rsc=health"
+            for attempt in 1 2; do
+              ct=$(curl -s -o /tmp/page.html -w '%{content_type}' "$SITE/lookup/$n")
+              ads=$(grep -c 'adsbygoogle.js?client=ca-pub-' /tmp/page.html || true)
+              echo "$n attempt $attempt: $ct, adsense tags: $ads"
+              case "$ct" in text/html*) ;; *) echo "::error::/lookup/$n served $ct instead of HTML"; fail=1 ;; esac
+              [ "$ads" -ge 1 ] || { echo "::error::/lookup/$n has no AdSense script"; fail=1; }
+            done
+          done
+          exit $fail
+
       - name: Crawl surface is bounded
         run: |
           curl -fsS "$SITE/sitemap.xml" -o /tmp/sitemap.xml

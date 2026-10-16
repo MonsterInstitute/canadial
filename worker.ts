@@ -90,35 +90,55 @@ export default {
   },
 } satisfies ExportedHandler;
 
+// Requests from Next's client router (navigation, prefetch) ask the same URL
+// for an RSC flight payload instead of HTML. They must never read or write the
+// edge cache: the cache is keyed on the path alone, so caching one would serve
+// the payload to the next visitor as the page (it happened, Oct 2026).
+const RSC_HEADERS = ["rsc", "next-router-prefetch", "next-router-state-tree", "next-router-segment-prefetch"];
+
+function isRscRequest(request: Request, url: URL): boolean {
+  return (
+    url.searchParams.has("_rsc") ||
+    RSC_HEADERS.some((h) => request.headers.has(h)) ||
+    (request.headers.get("accept") ?? "").includes("text/x-component")
+  );
+}
+
+const isHtml = (r: Response) => (r.headers.get("content-type") ?? "").toLowerCase().startsWith("text/html");
+
 async function serve(request: Request, url: URL, env: unknown, ctx: ExecutionContext) {
-  if (request.method !== "GET" || !NUMBER_PAGE.test(url.pathname)) {
+  if (request.method !== "GET" || !NUMBER_PAGE.test(url.pathname) || isRscRequest(request, url)) {
     return render(request, env, ctx);
   }
 
   // Key on the path alone: query strings would let anyone mint unlimited
-  // cache misses (each a render and D1 reads) for the same page.
+  // cache misses (each a render and D1 reads) for the same page. Safe only
+  // because RSC requests never get here and only HTML is ever stored.
   const key = new Request(`${url.origin}${url.pathname}`, { method: "GET" });
   const cache = (caches as unknown as { default: Cache }).default;
   const hit = await cache.match(key);
-  if (hit) {
+  if (hit && isHtml(hit)) {
     const headers = new Headers(hit.headers);
     headers.set("cache-control", NUMBER_PAGE_BROWSER_CACHE);
     headers.set("x-edge-cache", "HIT");
     return new Response(hit.body, { status: hit.status, headers });
   }
+  // Anything non-HTML found under this key is a poisoned entry: drop it.
+  if (hit) ctx.waitUntil(cache.delete(key));
 
   const response = await render(request, env, ctx);
-  // Only 200s. A 500 must never be cached (invariant 6); 404s and redirects
-  // are cheap to recompute and not worth a cache slot each.
-  if (response.status === 200) {
+  // Only HTML 200s. A 500 must never be cached (invariant 6); 404s and
+  // redirects are cheap to recompute and not worth a cache slot each.
+  const cacheable = response.status === 200 && isHtml(response);
+  if (cacheable) {
     const cached = new Response(response.clone().body, response);
     cached.headers.set("cache-control", `public, s-maxage=${EDGE_TTL_SECONDS}`);
     cached.headers.delete("set-cookie");
     ctx.waitUntil(cache.put(key, cached));
   }
   const headers = new Headers(response.headers);
-  if (response.status === 200) headers.set("cache-control", NUMBER_PAGE_BROWSER_CACHE);
-  headers.set("x-edge-cache", "MISS");
+  if (cacheable) headers.set("cache-control", NUMBER_PAGE_BROWSER_CACHE);
+  headers.set("x-edge-cache", cacheable ? "MISS" : "BYPASS");
   return new Response(response.body, { status: response.status, headers });
 }
 
