@@ -98,11 +98,36 @@ report is evidence. **No code issues DELETE against `reports`**; D1 Time Travel
 
 ## Daily cycle
 
-`.github/workflows/daily-import.yml` runs at 08:00 UTC: FTC import (the FTC API,
-`FTC_API_KEY`), ReverseCanada import, then `/api/admin/refresh`, then
-`scripts/revalidate_pages.py`. All writes go through the admin API, so the
-workflow holds `ADMIN_TOKEN` and `REVALIDATE_SECRET` and no database
-credentials. The refresh must stay after the importers.
+`.github/workflows/daily-import.yml` runs at 08:00 UTC:
+
+1. **FTC** (`scripts/ftc_daily.py`): for each of the last 7 days,
+   `/api/admin/ftc/fetch` stores that day's `DNC_Complaint_Numbers_<day>.csv`
+   byte for byte in `r2://canadial-data/ftc/raw/<yyyy>/` (the Worker fetches
+   it: ftc.gov serves Cloudflare but answers scripted clients elsewhere with an
+   HTML "404"), then `/api/admin/ftc/ingest` adds it to the aggregates. Each
+   day is applied once, atomically, with its `ftc_ingest_log` row.
+2. ReverseCanada import.
+3. `/api/admin/refresh` (counters and rollups; write-guarded, ~1.4k rows
+   written per run).
+4. `scripts/revalidate_pages.py`.
+
+All writes go through the admin API: the workflow holds `ADMIN_TOKEN` and
+`REVALIDATE_SECRET` and no database credentials.
+
+## FTC data
+
+Per-number aggregates of every FTC Do Not Call complaint since the archive
+starts (2022-05-27): `numbers.ftc_total/ftc_robocall/ftc_first/ftc_last`,
+`ftc_monthly`, `ftc_states`, `ftc_subjects`. Raw files in R2 are the source of
+truth; `scripts/ftc_download_raw.py` + `scripts/ftc_aggregate.py` rebuild every
+aggregate from them. The rules (row dedupe across the previous 7 files, date
+formats, call-date sanity) live in both `scripts/ftc_aggregate.py` and
+`src/lib/ftc-ingest.ts` and must stay identical — they were verified to produce
+identical rows on real files.
+
+The old one-row-per-number FTC rows (`reports.source = 'ftc_dnc'`) still back
+the current number pages; they are deleted when the pages switch to the
+aggregates (Phase 4), never counted alongside them.
 
 ## Watch
 
