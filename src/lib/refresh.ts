@@ -131,37 +131,40 @@ type AreaPayload = {
 };
 
 // One area code's summary from a primary-key range of numbers (~10k rows on
-// average) and the matching range of ftc_subjects.
+// average) and the matching ranges of ftc_subjects and reports: four reads in
+// one round trip.
 async function computeArea(code: number, names: Map<number, string>): Promise<AreaPayload | null> {
   const lo = code * 10_000_000;
   const hi = lo + 9_999_999;
-  const [agg] = await read<{ numbers: number; complaints: number }>(
-    `SELECT count(*) AS numbers, coalesce(sum(ftc_total + c_total), 0) AS complaints
-     FROM numbers WHERE phone BETWEEN ?1 AND ?2 AND ftc_total + c_total > 0`,
-    [lo, hi]
-  );
+  type Top = { phone: number; total: number; c_top_type: string | null; ftc_top: number | null; latest_comment: string | null };
+  const [aggRows, subjects, community, top] = await batch<
+    [{ numbers: number; complaints: number }, { subject: number; n: number }, { type: string | null; n: number }, Top]
+  >([
+    {
+      sql: `SELECT count(*) AS numbers, coalesce(sum(ftc_total + c_total), 0) AS complaints
+            FROM numbers WHERE phone BETWEEN ?1 AND ?2 AND ftc_total + c_total > 0`,
+      params: [lo, hi],
+    },
+    { sql: "SELECT subject, sum(n) AS n FROM ftc_subjects WHERE phone BETWEEN ?1 AND ?2 GROUP BY subject", params: [lo, hi] },
+    { sql: `SELECT type, count(*) AS n FROM reports WHERE phone BETWEEN ?1 AND ?2 AND ${COMMUNITY} GROUP BY type`, params: [lo, hi] },
+    {
+      sql: `SELECT n.phone, n.ftc_total + n.c_total AS total, n.c_top_type,
+              (SELECT subject FROM ftc_subjects s WHERE s.phone = n.phone ORDER BY s.n DESC, s.subject LIMIT 1) AS ftc_top,
+              (SELECT r.comment FROM reports r WHERE r.phone = n.phone AND r.comment IS NOT NULL AND r.${COMMUNITY}
+                ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS latest_comment
+            FROM numbers n WHERE n.phone BETWEEN ?1 AND ?2 AND n.ftc_total + n.c_total > 0
+            ORDER BY total DESC, n.phone LIMIT 100`,
+      params: [lo, hi],
+    },
+  ]);
+  const agg = aggRows[0];
   if (!agg || agg.numbers === 0) return null;
 
   const typeCounts: Record<string, number> = {};
   const add = (t: string, n: number) => (typeCounts[t] = (typeCounts[t] ?? 0) + n);
-  for (const r of await read<{ subject: number; n: number }>(
-    "SELECT subject, sum(n) AS n FROM ftc_subjects WHERE phone BETWEEN ?1 AND ?2 GROUP BY subject",
-    [lo, hi]
-  )) add(typeOfSubject(names.get(r.subject) ?? ""), r.n);
-  for (const r of await read<{ type: string | null; n: number }>(
-    `SELECT type, count(*) AS n FROM reports WHERE phone BETWEEN ?1 AND ?2 AND ${COMMUNITY} GROUP BY type`,
-    [lo, hi]
-  )) add(r.type ?? "Other", r.n);
+  for (const r of subjects) add(typeOfSubject(names.get(r.subject) ?? ""), r.n);
+  for (const r of community) add(r.type ?? "Other", r.n);
 
-  const top = await read<{ phone: number; total: number; c_top_type: string | null; ftc_top: number | null; latest_comment: string | null }>(
-    `SELECT n.phone, n.ftc_total + n.c_total AS total, n.c_top_type,
-            (SELECT subject FROM ftc_subjects s WHERE s.phone = n.phone ORDER BY s.n DESC, s.subject LIMIT 1) AS ftc_top,
-            (SELECT r.comment FROM reports r WHERE r.phone = n.phone AND r.comment IS NOT NULL AND r.${COMMUNITY}
-              ORDER BY r.created_at DESC, r.id DESC LIMIT 1) AS latest_comment
-     FROM numbers n WHERE n.phone BETWEEN ?1 AND ?2 AND n.ftc_total + n.c_total > 0
-     ORDER BY total DESC, n.phone LIMIT 100`,
-    [lo, hi]
-  );
   const topType = Object.entries(typeCounts).filter(([t]) => t !== "Other").sort((a, b) => b[1] - a[1])[0]?.[0]
     ?? Object.keys(typeCounts)[0] ?? null;
   return {
@@ -195,14 +198,20 @@ async function refreshAreas(codes: number[] | null, names: Map<number, string>) 
       "SELECT DISTINCT phone / 10000000 AS code FROM numbers WHERE phone >= 2000000000"
     )).map((r) => r.code);
   const payloads: Record<string, number> = {};
-  for (const code of list) {
-    const p = await computeArea(code, names);
-    if (p) {
-      await writeIfChanged("area_summaries2", "code", code, p);
-      payloads[String(code).padStart(3, "0")] = p.number_count;
-    } else {
-      await exec("DELETE FROM area_summaries2 WHERE code = ?1", [code]);
-    }
+  // Eight area codes at a time: round trips, not database work, dominated.
+  const CONCURRENCY = 8;
+  for (let i = 0; i < list.length; i += CONCURRENCY) {
+    await Promise.all(
+      list.slice(i, i + CONCURRENCY).map(async (code) => {
+        const p = await computeArea(code, names);
+        if (p) {
+          await writeIfChanged("area_summaries2", "code", code, p);
+          payloads[String(code).padStart(3, "0")] = p.number_count;
+        } else {
+          await exec("DELETE FROM area_summaries2 WHERE code = ?1", [code]);
+        }
+      })
+    );
   }
   return payloads;
 }
