@@ -4,7 +4,8 @@ import { HUBS } from "./hubs";
 import { PROVINCE_PAGES } from "./provinces";
 
 // Everything pages read by primary key instead of computing at render time:
-//   numbers.c_*        community counters per number (reports, not FTC rows)
+//   numbers.c_*        community counters per number (reports, not FTC rows);
+//                      comm_total mirrors c_total for the numbers_by_block index
 //   numbers.listed     sitemap flag
 //   area_summaries2    one row per area code
 //   site_stats2        one row
@@ -71,16 +72,17 @@ const phoneScope = (phone: number): Scope => ({ where: "AND phone = ?1", params:
 
 async function refreshCommunity(s: Scope) {
   await exec(
-    `INSERT INTO numbers (phone, c_total, c_spam, c_last, c_types)
-     SELECT phone, count(*), sum(is_spam), max(created_at),
+    `INSERT INTO numbers (phone, c_total, comm_total, c_spam, c_last, c_types)
+     SELECT phone, count(*), count(*), sum(is_spam), max(created_at),
             (SELECT json_group_object(type, n) FROM (
                SELECT coalesce(r2.type, 'Other') AS type, count(*) AS n FROM reports r2
                WHERE r2.phone = r.phone AND r2.${COMMUNITY} GROUP BY 1))
      FROM reports r WHERE ${COMMUNITY} ${s.where} GROUP BY phone
      ON CONFLICT (phone) DO UPDATE SET
-       c_total = excluded.c_total, c_spam = excluded.c_spam,
+       c_total = excluded.c_total, comm_total = excluded.c_total, c_spam = excluded.c_spam,
        c_last = excluded.c_last, c_types = excluded.c_types
      WHERE numbers.c_total IS NOT excluded.c_total
+        OR numbers.comm_total IS NOT excluded.c_total
         OR numbers.c_spam  IS NOT excluded.c_spam
         OR numbers.c_last  IS NOT excluded.c_last
         OR numbers.c_types IS NOT excluded.c_types`,
@@ -89,8 +91,8 @@ async function refreshCommunity(s: Scope) {
   // Numbers that no longer have any community report (moderation, or the old
   // FTC rows being excluded) drop back to zero.
   await exec(
-    `UPDATE numbers SET c_total = 0, c_spam = 0, c_last = NULL, c_top_type = NULL, c_types = NULL
-     WHERE c_total > 0 ${s.where}
+    `UPDATE numbers SET c_total = 0, comm_total = 0, c_spam = 0, c_last = NULL, c_top_type = NULL, c_types = NULL
+     WHERE (c_total > 0 OR comm_total > 0) ${s.where}
        AND phone NOT IN (SELECT phone FROM reports WHERE ${COMMUNITY} ${s.where})`,
     s.params
   );
