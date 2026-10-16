@@ -230,6 +230,12 @@ export async function getSiteStats(): Promise<SiteStats> {
   );
 }
 
+// Most-reported Canadian numbers (all time), from the same one-row rollup.
+export async function getMostReported(): Promise<{ phone: string; n: number }[]> {
+  const row = await first<{ top: string | null }>("SELECT json_extract(payload, '$.top_numbers') AS top FROM site_stats2 WHERE id = 1");
+  return row?.top ? (JSON.parse(row.top) as { phone: string; n: number }[]) : [];
+}
+
 export type TrendingNumber = {
   phone_number: string;
   type: string | null;

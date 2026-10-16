@@ -6,12 +6,15 @@ import { subjectLabel } from "./hubs";
 // Everything a number page shows, in one D1 round trip. Every read is bounded
 // by a primary key or an index range with a small, fixed ceiling:
 //   organizations / numbers / number_blocks / number_blocks_x   1 row each
+//                 (numbers carries the hour/weekday/city/area-code breakdowns)
 //   ftc_monthly   one row per month with complaints (<= ~65)
 //   ftc_states    top 6 (reads <= ~60, one per state)
 //   ftc_subjects  <= 16 (one per FTC category)
 //   reports       5 newest community reports
 //   neighbours    5 off the numbers_by_block index
 //   ftc_ingest_log max(day), one row
+//   campaigns     1 row, plus <= 5 other members off numbers_by_campaign
+//   block_summaries 1 row, plus its <= 4 subject names
 // None of these grows with the size of the database. Errors throw
 // (src/lib/d1.ts): a failed read is never "no data".
 
@@ -54,6 +57,11 @@ export type NumberData = {
     monthly: { ym: string; n: number }[]; // every month first..last, zeros filled
     states: { state: string; n: number }[];
     subjects: { label: string; raw: string; n: number }[];
+    // Breakdowns of the same complaints (see migrations/0007_number_detail.sql).
+    hours: number[]; // 24 counts, by hour of the call as entered
+    weekdays: number[]; // 7 counts, Sunday first
+    cities: { city: string; state: string; n: number }[]; // commonest first
+    local: number; // complainants with the number's own area code
   };
   community: {
     total: number;
@@ -65,6 +73,16 @@ export type NumberData = {
   block: Block | null;
   tollFree: boolean;
   neighbours: { phone: string; complaints: number }[];
+  campaign: {
+    size: number;
+    subject: { label: string; raw: string };
+    firstDay: string; // YYYY-MM-DD: first member's first complaint
+    lastDay: string; // last member's first complaint
+    complaints: number;
+    states: { state: string; n: number }[];
+    others: { phone: string; complaints: number }[];
+  } | null;
+  blockSummary: { numbers: number; complaints: number; robocalls: number; subjects: { label: string; raw: string; n: number }[] } | null;
   ftcDataThrough: string | null;
 };
 
@@ -105,15 +123,24 @@ export async function loadNumber(phone: string): Promise<NumberData> {
   const npanxx = Math.floor(key / 10_000);
 
   type Org = NonNullable<NumberData["org"]>;
-  type Num = { ftc_total: number; ftc_robocall: number; ftc_first: number | null; ftc_last: number | null; c_total: number; c_last: string | null; c_top_type: string | null; c_types: string | null };
+  type Num = {
+    ftc_total: number; ftc_robocall: number; ftc_first: number | null; ftc_last: number | null;
+    c_total: number; c_last: string | null; c_top_type: string | null; c_types: string | null;
+    ftc_hours: string | null; ftc_wdays: string | null; ftc_cities: string | null; ftc_local: number;
+  };
+  type Camp = { size: number; first_day: number; last_day: number; complaints: number; states: string | null; name: string };
   type Blk = { country: "CA" | "US"; region: string | null; rate_center: string | null; place: string | null; carrier: string | null; source: "CNAC" | "NANPA"; as_of: string; status: string };
   type BlkX = { status: string; carrier: string | null };
 
-  const [orgs, nums, monthly, states, subjects, reports, blocks, xblocks, neighbours, latest, npaRows] = await batch<
-    [Org, Num, { ym: number; n: number }, { state: string; n: number }, { name: string; n: number }, { id: string; type: string | null; comment: string | null; created_at: string; source: string | null }, Blk, BlkX, { phone: number; complaints: number }, { day: string | null }, { country: "CA" | "US"; source: "CNAC" | "NANPA"; as_of: string }]
+  const [orgs, nums, monthly, states, subjects, reports, blocks, xblocks, neighbours, latest, npaRows, camps, campOthers, blockSums, blockSubjects] = await batch<
+    [Org, Num, { ym: number; n: number }, { state: string; n: number }, { name: string; n: number }, { id: string; type: string | null; comment: string | null; created_at: string; source: string | null }, Blk, BlkX, { phone: number; complaints: number }, { day: string | null }, { country: "CA" | "US"; source: "CNAC" | "NANPA"; as_of: string }, Camp, { phone: number; complaints: number }, { numbers: number; complaints: number; robocalls: number }, { name: string; n: number }]
   >([
     { sql: "SELECT name, department, category, description, hours, tip, website FROM organizations WHERE phone = ?", params: [key] },
-    { sql: "SELECT ftc_total, ftc_robocall, ftc_first, ftc_last, c_total, c_last, c_top_type, c_types FROM numbers WHERE phone = ?", params: [key] },
+    {
+      sql: `SELECT ftc_total, ftc_robocall, ftc_first, ftc_last, c_total, c_last, c_top_type, c_types,
+                   ftc_hours, ftc_wdays, ftc_cities, ftc_local FROM numbers WHERE phone = ?`,
+      params: [key],
+    },
     { sql: "SELECT ym, n FROM ftc_monthly WHERE phone = ? ORDER BY ym", params: [key] },
     { sql: "SELECT state, n FROM ftc_states WHERE phone = ? ORDER BY n DESC, state LIMIT 6", params: [key] },
     { sql: "SELECT s.name, f.n FROM ftc_subjects f JOIN ftc_subject_names s ON s.id = f.subject WHERE f.phone = ? ORDER BY f.n DESC, s.name", params: [key] },
@@ -142,6 +169,25 @@ export async function loadNumber(phone: string): Promise<NumberData> {
     {
       sql: "SELECT country, source, as_of FROM number_blocks WHERE npanxx BETWEEN ? AND ? LIMIT 1",
       params: [npa * 1000, npa * 1000 + 999],
+    },
+    {
+      sql: `SELECT c.size, c.first_day, c.last_day, c.complaints, c.states, s.name
+            FROM numbers n JOIN campaigns c ON c.id = n.campaign JOIN ftc_subject_names s ON s.id = c.subject
+            WHERE n.phone = ?`,
+      params: [key],
+    },
+    {
+      // Off numbers_by_campaign: the first five other members by phone.
+      sql: `SELECT phone, ftc_total + c_total AS complaints FROM numbers
+            WHERE campaign = (SELECT campaign FROM numbers WHERE phone = ?1) AND phone != ?1 ORDER BY campaign, phone LIMIT 5`,
+      params: [key],
+    },
+    { sql: "SELECT numbers, complaints, robocalls FROM block_summaries WHERE npanxx = ?", params: [npanxx] },
+    {
+      sql: `SELECT s.name, json_extract(j.value, '$[1]') AS n
+            FROM block_summaries b, json_each(b.subjects) j JOIN ftc_subject_names s ON s.id = json_extract(j.value, '$[0]')
+            WHERE b.npanxx = ? ORDER BY j.key`,
+      params: [npanxx],
     },
   ]);
 
@@ -183,6 +229,19 @@ export async function loadNumber(phone: string): Promise<NumberData> {
     };
   }
 
+  const counts = (json: string | null, size: number) => {
+    const out = new Array<number>(size).fill(0);
+    if (json) for (const [k, v] of Object.entries(JSON.parse(json) as Record<string, number>)) out[Number(k)] = v;
+    return out;
+  };
+  const cities = num?.ftc_cities
+    ? Object.entries(JSON.parse(num.ftc_cities) as Record<string, number>)
+        .map(([k, v]) => ({ city: k.split("|")[0], state: k.split("|")[1], n: v }))
+        .sort((a, b) => b.n - a.n || a.city.localeCompare(b.city))
+    : [];
+  const c = camps[0];
+  const bs = blockSums[0];
+
   return {
     phone: n,
     org: orgs[0] ?? null,
@@ -194,6 +253,10 @@ export async function loadNumber(phone: string): Promise<NumberData> {
       monthly: filled,
       states,
       subjects: subjects.map((s) => ({ label: subjectLabel(s.name), raw: s.name, n: s.n })),
+      hours: counts(num?.ftc_hours ?? null, 24),
+      weekdays: counts(num?.ftc_wdays ?? null, 7),
+      cities,
+      local: num?.ftc_local ?? 0,
     },
     community: {
       total: num?.c_total ?? 0,
@@ -205,6 +268,20 @@ export async function loadNumber(phone: string): Promise<NumberData> {
     block,
     tollFree: TOLL_FREE.has(npa),
     neighbours: neighbours.map((r) => ({ phone: String(r.phone), complaints: r.complaints })),
+    campaign: c
+      ? {
+          size: c.size,
+          subject: { label: subjectLabel(c.name), raw: c.name },
+          firstDay: ymd(c.first_day)!,
+          lastDay: ymd(c.last_day)!,
+          complaints: c.complaints,
+          states: c.states ? (JSON.parse(c.states) as [string, number][]).map(([state, n]) => ({ state, n })) : [],
+          others: campOthers.map((r) => ({ phone: String(r.phone), complaints: r.complaints })),
+        }
+      : null,
+    blockSummary: bs
+      ? { ...bs, subjects: blockSubjects.map((s) => ({ label: subjectLabel(s.name), raw: s.name, n: s.n })) }
+      : null,
     ftcDataThrough: latest[0]?.day ?? null,
   };
 }

@@ -18,6 +18,7 @@ import { SITE_NAME, SITE_URL } from "@/lib/config";
 import ReportForm from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
 import NumberActivity from "@/components/NumberActivity";
+import QuickComment from "@/components/QuickComment";
 
 // Every number page is built from that number's own data: FTC complaint
 // aggregates, community reports, and the NPA-NXX block it belongs to. No
@@ -170,6 +171,53 @@ function Bars({ rows, total }: { rows: { label: string; n: number }[]; total: nu
   );
 }
 
+const hourLabel = (h: number) => `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "a.m." : "p.m."}`;
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+// The busiest slot, only when it stands out: 2+ calls and no tie.
+const peak = (xs: number[]): number | null => {
+  const i = xs.reduce((best, x, j) => (x > xs[best] ? j : best), 0);
+  return xs[i] >= 2 && xs.filter((x) => x === xs[i]).length === 1 ? i : null;
+};
+
+// One row of cells, darker for more complaints, the count in each non-empty cell.
+function CountStrip({ counts, labels, ticks, caption }: { counts: number[]; labels: string[]; ticks?: Record<number, string>; caption: string }) {
+  const max = Math.max(...counts, 1);
+  return (
+    <figure>
+      <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${counts.length}, minmax(0, 1fr))` }} role="img" aria-label={caption}>
+        {counts.map((n, i) => (
+          <div
+            key={i}
+            title={`${labels[i]}: ${nf(n)}`}
+            className={`flex h-8 items-center justify-center rounded-sm text-[10px] tabular-nums ${n ? (n / max > 0.5 ? "bg-red-600 text-white" : "bg-red-200 text-red-900") : "bg-zinc-100 text-transparent"}`}
+          >
+            {n ? nf(n) : ""}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 grid text-[10px] text-zinc-500" style={{ gridTemplateColumns: `repeat(${counts.length}, minmax(0, 1fr))` }}>
+        {counts.map((_, i) => <span key={i} className="whitespace-nowrap">{ticks ? ticks[i] ?? "" : labels[i]}</span>)}
+      </div>
+    </figure>
+  );
+}
+
+// Share of FTC complainants whose area code is the number's own, when it says
+// something: U.S. geographic numbers with 3+ complaints, at either end of the
+// range. (44.7% of all such complaints match; the per-number shares split
+// sharply into mostly-local and not-local.) FTC complainants are in the U.S.,
+// so a Canadian number never matches and the line isn't shown for one.
+function localShare(d: NumberData): { kind: "local" | "distant"; local: number; total: number; code: string } | null {
+  if (d.tollFree || d.block?.country !== "US" || d.ftc.total < 3) return null;
+  const share = d.ftc.local / d.ftc.total;
+  const code = d.phone.slice(0, 3);
+  if (share >= 0.5) return { kind: "local", local: d.ftc.local, total: d.ftc.total, code };
+  if (share <= 0.1) return { kind: "distant", local: d.ftc.local, total: d.ftc.total, code };
+  return null;
+}
+
 function buildFaq(d: NumberData, pretty: string, v: Verdict): { q: string; a: string }[] {
   const faq: { q: string; a: string }[] = [];
   const place = placeLabel(d);
@@ -191,6 +239,15 @@ function buildFaq(d: NumberData, pretty: string, v: Verdict): { q: string; a: st
   }
   const top = d.ftc.subjects.find((s) => s.label !== "Not specified / other");
   if (top) faq.push({ q: `What do callers from ${pretty} say?`, a: `The most common complaint category is "${top.label}" (${pct(top.n, d.ftc.total)}% of FTC complaints).` });
+  const h = peak(d.ftc.hours);
+  const w = peak(d.ftc.weekdays);
+  if (h !== null || w !== null) {
+    const parts = [];
+    if (h !== null) parts.push(`the most common time was the ${hourLabel(h)} hour (${nf(d.ftc.hours[h])} of ${nf(sum(d.ftc.hours))} calls with a time)`);
+    if (w !== null) parts.push(`the most common day was ${WEEKDAY_NAMES[w]} (${nf(d.ftc.weekdays[w])} of ${nf(sum(d.ftc.weekdays))})`);
+    const a = parts.join("; ");
+    faq.push({ q: `When does ${pretty} call?`, a: `In FTC complaints, ${a}.` });
+  }
   return faq;
 }
 
@@ -205,6 +262,11 @@ export default async function NumberPage({ params }: Props) {
   const nxx = n.slice(3, 6);
   const faq = buildFaq(d, pretty, v);
   const totalTypes = Object.values(d.community.types).reduce((a, b) => a + b, 0);
+  const timed = sum(d.ftc.hours);
+  const dated = sum(d.ftc.weekdays);
+  const local = localShare(d);
+  const fewComplaints = d.ftc.total + d.community.total <= 3;
+  const blockContext = fewComplaints && !d.tollFree && d.blockSummary && d.blockSummary.numbers - (d.ftc.total ? 1 : 0) >= 5 ? d.blockSummary : null;
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -233,6 +295,7 @@ export default async function NumberPage({ params }: Props) {
         <div className="text-sm font-semibold uppercase tracking-wide">{v.label}</div>
         <p className="mt-1 text-sm">{v.reason}</p>
       </section>
+      <QuickComment phone={n} pretty={pretty} />
 
       {/* 2. Complaint history */}
       {d.ftc.total + d.community.total > 0 && (
@@ -270,6 +333,68 @@ export default async function NumberPage({ params }: Props) {
         </Section>
       )}
 
+      {/* When the calls came */}
+      {(timed >= 2 || dated >= 2) && (
+        <Section title="When the calls came">
+          {timed >= 2 && (
+            <>
+              <p className="mb-2 text-sm text-zinc-600">
+                Time of day of {nf(timed)} call{timed === 1 ? "" : "s"}
+                {peak(d.ftc.hours) !== null ? <>; most often the {hourLabel(peak(d.ftc.hours)!)} hour ({nf(d.ftc.hours[peak(d.ftc.hours)!])})</> : null}:
+              </p>
+              <CountStrip
+                counts={d.ftc.hours}
+                labels={d.ftc.hours.map((_, h) => `${hourLabel(h)} hour`)}
+                ticks={{ 0: "12a", 6: "6a", 12: "12p", 18: "6p" }}
+                caption="FTC complaints by hour of the call"
+              />
+            </>
+          )}
+          {dated >= 2 && (
+            <div className={timed >= 2 ? "mt-4" : ""}>
+              <p className="mb-2 text-sm text-zinc-600">
+                Day of the week of {nf(dated)} call{dated === 1 ? "" : "s"}
+                {peak(d.ftc.weekdays) !== null ? <>; most often {WEEKDAY_NAMES[peak(d.ftc.weekdays)!]} ({nf(d.ftc.weekdays[peak(d.ftc.weekdays)!])})</> : null}:
+              </p>
+              <CountStrip counts={d.ftc.weekdays} labels={WEEKDAYS} caption="FTC complaints by day of the week" />
+            </div>
+          )}
+          <p className="mt-2 text-xs text-zinc-500">
+            The date and time of the call as complainants entered them on the FTC form; the time zone isn&apos;t recorded. Times entered as exactly midnight or noon are left out (they&apos;re usually the form&apos;s default).
+          </p>
+        </Section>
+      )}
+
+      {/* A group of similar numbers in the same block */}
+      {d.campaign && (
+        <Section title="Part of a group of similar numbers">
+          <p className="text-sm text-zinc-700">
+            {pretty} is one of <strong>{nf(d.campaign.size)} numbers in {code}-{nxx}</strong> first reported to the FTC for &ldquo;{d.campaign.subject.label}&rdquo; calls
+            {d.campaign.firstDay === d.campaign.lastDay ? <> on {formatDate(d.campaign.firstDay)}</> : <> between {formatDate(d.campaign.firstDay)} and {formatDate(d.campaign.lastDay)}</>}
+            , {nf(d.campaign.complaints)} complaints in all
+            {d.campaign.states.length > 0 && (
+              <>; most from {d.campaign.states.map((s) => `${s.state} (${pct(s.n, d.campaign!.complaints)}%)`).join(", ")}</>
+            )}
+            .
+          </p>
+          <p className="mt-2 text-xs text-zinc-500">
+            Numbers from one block reported for the same thing within days of each other are rarely chance; they usually mean one operation cycling through numbers. <Link href="/methodology#groups" className="underline">How groups are found</Link>.
+          </p>
+          {d.campaign.others.length > 0 && (
+            <ul className="mt-3 divide-y divide-zinc-100 rounded-lg border border-zinc-200 text-sm">
+              {d.campaign.others.map((x) => (
+                <li key={x.phone}>
+                  <Link href={`/lookup/${x.phone}`} className="flex justify-between px-3 py-2 hover:bg-zinc-50">
+                    <span className="font-medium">{formatPhone(x.phone)}</span>
+                    <span className="text-zinc-500">{nf(x.complaints)} complaint{x.complaints === 1 ? "" : "s"}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      )}
+
       <AdUnit className="mt-8" />
 
       {/* 4. Origin */}
@@ -294,10 +419,34 @@ export default async function NumberPage({ params }: Props) {
         ) : (
           <p className="text-sm text-zinc-600">There is no Canadian or U.S. numbering record for this area code.</p>
         )}
+        {local && (
+          <p className="mt-5 rounded-lg border border-zinc-200 p-3 text-sm text-zinc-700">
+            {local.kind === "local" ? (
+              <>
+                <strong>{nf(local.local)} of {nf(local.total)} complainants ({pct(local.local, local.total)}%) have area code {local.code}, the number&apos;s own.</strong>{" "}
+                Scam callers often show a local-looking number (&ldquo;neighbour spoofing&rdquo;); a local business calling nearby customers looks the same.
+              </>
+            ) : (
+              <>
+                <strong>{local.local === 0 ? "None" : nf(local.local)} of {nf(local.total)} complainants {local.local === 1 ? "has" : "have"} area code {local.code}, the number&apos;s own.</strong>{" "}
+                The calls reached people elsewhere, so this isn&apos;t a local caller to them.
+              </>
+            )}
+          </p>
+        )}
         {d.ftc.states.length > 0 && (
           <div className="mt-5">
             <p className="mb-3 text-sm text-zinc-600">Where FTC complainants were located (U.S. states):</p>
             <Bars rows={d.ftc.states.map((s) => ({ label: s.state, n: s.n }))} total={d.ftc.total} />
+          </div>
+        )}
+        {d.ftc.cities.length > 0 && (
+          <div className="mt-5">
+            <p className="text-sm text-zinc-600">Complainants&apos; cities{d.ftc.cities.length > 5 ? " (most common)" : ""}:</p>
+            <p className="mt-1 text-sm text-zinc-800">
+              {d.ftc.cities.slice(0, 5).map((c) => `${c.city}, ${c.state} (${nf(c.n)})`).join(" · ")}
+            </p>
+            <p className="mt-1 text-xs text-zinc-500">As typed on the FTC form, with spelling variants merged; complaints without a city aren&apos;t counted.</p>
           </div>
         )}
       </Section>
@@ -305,6 +454,16 @@ export default async function NumberPage({ params }: Props) {
       {/* 5. Same block */}
       {d.neighbours.length > 0 && (
         <Section title={`Other reported numbers in ${code}-${nxx}`}>
+          {blockContext && (
+            <p className="mb-3 text-sm text-zinc-700">
+              {nf(blockContext.numbers)} numbers in {code}-{nxx} have {nf(blockContext.complaints)} FTC complaints between them ({pct(blockContext.robocalls, blockContext.complaints)}% robocalls)
+              {d.ftc.total > 0 ? <>, {nf(d.ftc.total)} of them about {pretty}</> : null}.
+              {(() => {
+                const top = blockContext.subjects.filter((s) => s.label !== "Not specified / other").slice(0, 3);
+                return top.length ? <> The commonest categories in the block: {top.map((s) => `${s.label} (${pct(s.n, blockContext.complaints)}%)`).join(", ")}.</> : null;
+              })()}
+            </p>
+          )}
           <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 text-sm">
             {d.neighbours.map((x) => (
               <li key={x.phone}>

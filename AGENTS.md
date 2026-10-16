@@ -1,7 +1,11 @@
 <!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
 <!-- END:nextjs-agent-rules -->
 
 # Architecture
@@ -114,7 +118,7 @@ report is evidence. **No code issues DELETE against `reports`**; D1 Time Travel
    day is applied once, atomically, with its `ftc_ingest_log` row.
 2. ReverseCanada import.
 3. `/api/admin/refresh` (counters and rollups; write-guarded, ~1.4k rows
-   written per run).
+   written per run, plus a few hundred for campaigns and block summaries).
 4. `scripts/revalidate_pages.py`.
 
 All writes go through the admin API: the workflow holds `ADMIN_TOKEN` and
@@ -124,12 +128,24 @@ All writes go through the admin API: the workflow holds `ADMIN_TOKEN` and
 
 Per-number aggregates of every FTC Do Not Call complaint since the archive
 starts (2022-05-27): `numbers.ftc_total/ftc_robocall/ftc_first/ftc_last`,
-`ftc_monthly`, `ftc_states`, `ftc_subjects`. Raw files in R2 are the source of
+`ftc_monthly`, `ftc_states`, `ftc_subjects`, and small JSON breakdowns on
+`numbers` (migration 0007): `ftc_hours` (hour of call; exact 00:00 and 12:00
+dropped as form defaults), `ftc_wdays`, `ftc_cities` (top 10, cut after every
+day), `ftc_local` (complainant area code = the number's). The daily ingest
+merges them in SQL inside the same transaction. Raw files in R2 are the source of
 truth; `scripts/ftc_download_raw.py` + `scripts/ftc_aggregate.py` rebuild every
 aggregate from them. The rules (row dedupe across the previous 7 files, date
 formats, call-date sanity) live in both `scripts/ftc_aggregate.py` and
 `src/lib/ftc-ingest.ts` and must stay identical — they were verified to produce
 identical rows on real files.
+
+Derived from them by the refresh: `block_summaries` (FTC totals per NPA-NXX,
+"areas" part) and `campaigns` + `numbers.campaign` ("campaigns" part,
+`src/lib/campaigns.ts`): same block, same main subject, first complaints in a
+chain at most 3 days apart, Poisson p < 1e-9 against the area code's rate.
+Measured against a shuffled-block control, ~15% of grouped numbers would
+appear by chance, so pages describe a group and call it likely, never certain.
+Generic subjects are matched by name, not id (ids differ between databases).
 
 The old one-row-per-number FTC rows (`reports.source = 'ftc_dnc'`) still back
 the current number pages; they are deleted when the pages switch to the

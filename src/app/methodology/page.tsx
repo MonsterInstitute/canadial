@@ -20,7 +20,13 @@ export default async function Methodology() {
         <li><strong>Categories</strong>: the subject the complainant chose from the FTC&apos;s list. <strong>Robocall share</strong> is the share of complaints marked as a recorded message.</li>
         <li><strong>Complainant location</strong>: the U.S. state the complainant gave. FTC complainants are mostly U.S. residents.</li>
         <li>Rows without a valid 10-digit North American number are skipped.</li>
+        <li><strong>Time of day and weekday</strong>: of the call as the complainant entered it; the FTC doesn&apos;t record a time zone. Times of exactly midnight or noon are left out: they are far more common than any minute around them, which is what a form default looks like. Complaints dated by the filing date have no call time or weekday.</li>
+        <li><strong>Cities</strong>: as typed by complainants, with case, ZIP codes and a trailing state removed so spellings of one city are counted together. Entries that aren&apos;t a place name are skipped. Each number keeps its ten most common cities.</li>
+        <li><strong>Same area code</strong>: complaints whose complainant area code is the number&apos;s own. Shown for U.S. numbers with three or more complaints when at least half, or at most a tenth, of complainants share it.</li>
       </ul>
+      <h2 id="groups">Groups of similar numbers</h2>
+      <p>Some callers cycle through many numbers from one block. A number page shows a group when numbers in the same block (like 475-378), whose most common FTC category is the same, were first reported within three days of each other in a chain, and there are too many of them to be chance: fewer than one in a billion, compared with how often that category&apos;s numbers were first reported across the whole area code in those days. Numbers whose category is &ldquo;Other&rdquo; or not given, and toll-free numbers, are left out.</p>
+      <p>We checked the rule by shuffling numbers between blocks of the same area code and running it again: the shuffled data produced about 15% as many grouped numbers as the real data. So most groups reflect real clustering, but not every number in a group was used by the same caller.</p>
       <p>FTC complaints are not verified by the FTC or by Canadial. Scam callers often fake (spoof) the number that appears on caller ID, so complaints about a number don&apos;t prove its owner made the calls.</p>
       <h2>Community reports</h2>
       <p>Reports come from three places, and each report on a number page says which:</p>

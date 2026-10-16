@@ -67,7 +67,12 @@ export async function blockShardEntries(first: number, last: number) {
   return rows.map((r) => ({ loc: `/area/${String(r.b).slice(0, 3)}/${String(r.b).slice(3)}`, lastmod: ymd(r.d) }));
 }
 
+// Verified organizations' numbers that aren't already in a numbers shard
+// (numbers.listed), so no URL is in two sitemaps.
 export async function organizationNumbers(): Promise<string[]> {
-  const rows = await all<{ phone: number }>("SELECT phone FROM organizations WHERE phone >= 2000000000 ORDER BY phone");
+  const rows = await all<{ phone: number }>(
+    `SELECT o.phone FROM organizations o LEFT JOIN numbers n ON n.phone = o.phone
+     WHERE o.phone >= 2000000000 AND n.listed IS NOT 1 ORDER BY o.phone`
+  );
   return rows.map((r) => String(r.phone));
 }

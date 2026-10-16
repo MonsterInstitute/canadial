@@ -1,7 +1,8 @@
 import "server-only";
-import { allSlow, batch, run } from "./d1";
+import { allSlow, batch, batchSlow, run, type Query } from "./d1";
 import { HUBS } from "./hubs";
 import { PROVINCE_PAGES } from "./provinces";
+import { campaignIdRange, campaignsForArea, GENERIC_SUBJECT_NAMES, TOLL_FREE } from "./campaigns";
 
 // Everything pages read by primary key instead of computing at render time:
 //   numbers.c_*        community counters per number (reports, not FTC rows);
@@ -10,6 +11,8 @@ import { PROVINCE_PAGES } from "./provinces";
 //   area_summaries2    one row per area code
 //   site_stats2        one row
 //   monthly_reports2   one row per month
+//   block_summaries    FTC totals per NPA-NXX block
+//   campaigns          + numbers.campaign (src/lib/campaigns.ts)
 // (The *2 tables and c_* columns replace area_summaries / site_stats /
 // monthly_reports / comm_*, which the previous pages read; see migration 0004.)
 //   hub_numbers/stats  top numbers per scam-type hub
@@ -194,6 +197,7 @@ async function refreshAreas(codes: number[] | null, names: Map<number, string>) 
     await Promise.all(
       list.slice(i, i + CONCURRENCY).map(async (code) => {
         const p = await computeArea(code, names);
+        await refreshBlockSummaries(code);
         if (p) {
           await writeIfChanged("area_summaries2", "code", code, p);
           payloads[String(code).padStart(3, "0")] = p.number_count;
@@ -204,6 +208,112 @@ async function refreshAreas(codes: number[] | null, names: Map<number, string>) 
     );
   }
   return payloads;
+}
+
+// FTC totals per NPA-NXX block of one area code, in one statement; only
+// blocks whose totals changed are written.
+async function refreshBlockSummaries(code: number) {
+  const lo = code * 10_000_000;
+  await exec(
+    `WITH t AS (
+       SELECT phone / 10000 AS b, count(*) AS numbers, sum(ftc_total) AS complaints, sum(ftc_robocall) AS robocalls,
+              min(ftc_first) AS first_day, max(ftc_last) AS last_day
+       FROM numbers WHERE phone BETWEEN ?1 AND ?2 AND ftc_total > 0 GROUP BY 1
+     ), s AS (
+       SELECT phone / 10000 AS b, subject, sum(n) AS n FROM ftc_subjects WHERE phone BETWEEN ?1 AND ?2 GROUP BY 1, 2
+     ), r AS (
+       SELECT b, subject, n, row_number() OVER (PARTITION BY b ORDER BY n DESC, subject) AS rn FROM s
+     ), top AS (
+       SELECT b, json_group_array(json_array(subject, n)) AS subjects
+       FROM (SELECT b, subject, n FROM r WHERE rn <= 4 ORDER BY b, rn) GROUP BY b
+     )
+     INSERT INTO block_summaries (npanxx, numbers, complaints, robocalls, first_day, last_day, subjects)
+     SELECT t.b, t.numbers, t.complaints, t.robocalls, t.first_day, t.last_day, top.subjects
+     FROM t LEFT JOIN top ON top.b = t.b WHERE true
+     ON CONFLICT (npanxx) DO UPDATE SET
+       numbers = excluded.numbers, complaints = excluded.complaints, robocalls = excluded.robocalls,
+       first_day = excluded.first_day, last_day = excluded.last_day, subjects = excluded.subjects
+     WHERE block_summaries.numbers IS NOT excluded.numbers
+        OR block_summaries.complaints IS NOT excluded.complaints
+        OR block_summaries.robocalls IS NOT excluded.robocalls
+        OR block_summaries.first_day IS NOT excluded.first_day
+        OR block_summaries.last_day IS NOT excluded.last_day
+        OR block_summaries.subjects IS NOT excluded.subjects`,
+    [lo, lo + 9_999_999]
+  );
+}
+
+// Campaigns of one area code (src/lib/campaigns.ts): one read of its numbers,
+// then one batch (a transaction) that writes only what changed — members whose
+// campaign changed, campaign rows whose figures changed, campaigns that no
+// longer exist — and refreshes the campaigns' top states from the members.
+async function refreshCampaignsArea(npa: number, genericIds: Set<number>) {
+  const lo = npa * 10_000_000;
+  const rows = await read<{ phone: number; ftc_first: number | null; ftc_total: number; campaign: number | null; subject: number | null }>(
+    `SELECT n.phone, n.ftc_first, n.ftc_total, n.campaign,
+            (SELECT s.subject FROM ftc_subjects s WHERE s.phone = n.phone ORDER BY s.n DESC, s.subject LIMIT 1) AS subject
+     FROM numbers n WHERE n.phone BETWEEN ?1 AND ?2 AND n.ftc_total > 0`,
+    [lo, lo + 9_999_999]
+  );
+  const camps = campaignsForArea(
+    rows.filter((r) => r.subject !== null && r.ftc_first !== null).map((r) => ({ phone: r.phone, subject: r.subject!, first: r.ftc_first! })),
+    genericIds
+  );
+  const want = new Map<number, number>();
+  for (const c of camps) for (const p of c.members) want.set(p, c.id);
+  const moves = new Map<string, number[]>(); // new campaign id (or "NULL") -> phones
+  for (const r of rows) {
+    const to = want.get(r.phone) ?? null;
+    if (to !== r.campaign) {
+      const k = to === null ? "NULL" : String(to);
+      const list = moves.get(k);
+      if (list) list.push(r.phone);
+      else moves.set(k, [r.phone]);
+    }
+  }
+  const total = new Map(rows.map((r) => [r.phone, r.ftc_total]));
+  const [idLo, idHi] = campaignIdRange(npa);
+  const sql: Query[] = [];
+  for (const [to, phones] of moves) {
+    for (let i = 0; i < phones.length; i += 5000) {
+      sql.push({ sql: `UPDATE numbers SET campaign = ${to} WHERE phone IN (${phones.slice(i, i + 5000).join(",")})` });
+    }
+  }
+  for (let i = 0; i < camps.length; i += 500) {
+    const values = camps.slice(i, i + 500).map((c) =>
+      `(${c.id},${c.npanxx},${c.subject},${c.members.length},${c.firstDay},${c.lastDay},${c.members.reduce((a, p) => a + (total.get(p) ?? 0), 0)},strftime('%Y-%m-%dT%H:%M:%SZ','now'))`
+    );
+    sql.push({
+      sql: `INSERT INTO campaigns (id, npanxx, subject, size, first_day, last_day, complaints, refreshed_at) VALUES ${values.join(",")}
+            ON CONFLICT (id) DO UPDATE SET size = excluded.size, first_day = excluded.first_day, last_day = excluded.last_day,
+              complaints = excluded.complaints, refreshed_at = excluded.refreshed_at
+            WHERE campaigns.size IS NOT excluded.size OR campaigns.first_day IS NOT excluded.first_day
+               OR campaigns.last_day IS NOT excluded.last_day OR campaigns.complaints IS NOT excluded.complaints`,
+    });
+  }
+  sql.push({
+    sql: `DELETE FROM campaigns WHERE id BETWEEN ?1 AND ?2${camps.length ? ` AND id NOT IN (${camps.map((c) => c.id).join(",")})` : ""}`,
+    params: [idLo, idHi],
+  });
+  const STATES = `(SELECT json_group_array(json_array(state, n)) FROM (
+      SELECT s.state, sum(s.n) AS n FROM numbers m JOIN ftc_states s ON s.phone = m.phone
+      WHERE m.campaign = campaigns.id GROUP BY s.state ORDER BY n DESC, s.state LIMIT 3))`;
+  sql.push({ sql: `UPDATE campaigns SET states = ${STATES} WHERE id BETWEEN ?1 AND ?2 AND states IS NOT ${STATES}`, params: [idLo, idHi] });
+  const r = await batchSlow(sql, DEADLINE_MS);
+  totals.rowsRead += r.rowsRead;
+  totals.rowsWritten += r.rowsWritten;
+}
+
+async function refreshCampaigns(names: Map<number, string>) {
+  const genericIds = new Set([...names].filter(([, n]) => GENERIC_SUBJECT_NAMES.has(n)).map(([id]) => id));
+  // Toll-free numbers aren't tied to a block holder or a place: no campaigns.
+  const codes = (await read<{ code: number }>(
+    "SELECT DISTINCT phone / 10000000 AS code FROM numbers WHERE phone >= 2000000000"
+  )).map((r) => r.code).filter((c) => !TOLL_FREE.has(c));
+  const CONCURRENCY = 8;
+  for (let i = 0; i < codes.length; i += CONCURRENCY) {
+    await Promise.all(codes.slice(i, i + CONCURRENCY).map((code) => refreshCampaignsArea(code, genericIds)));
+  }
 }
 
 async function refreshSiteStats(names: Map<number, string>) {
@@ -220,11 +330,20 @@ async function refreshSiteStats(names: Map<number, string>) {
   for (const r of await read<{ code: number; n: number }>(
     "SELECT code, json_extract(payload, '$.number_count') AS n FROM area_summaries2"
   )) areaCodes[String(r.code).padStart(3, "0")] = r.n;
+  // The most-reported Canadian numbers, for homepage links: the site-wide top
+  // is within the union of each area code's top 100 (area_summaries2), so this
+  // reads one payload per Canadian area code, never the numbers table.
+  const topNumbers = await read<{ phone: string; n: number }>(
+    `SELECT json_extract(t.value, '$.phone_number') AS phone, json_extract(t.value, '$.report_count') AS n
+     FROM area_summaries2 a, json_each(a.payload, '$.top_numbers') t
+     WHERE a.code IN (${CANADIAN_CODES.join(",")}) ORDER BY n DESC, phone LIMIT 20`
+  );
   await writeIfChanged("site_stats2", "id", 1, {
     total_numbers: agg.numbers,
     total_reports: agg.complaints,
     type_counts: typeCounts,
     area_codes: areaCodes,
+    top_numbers: topNumbers,
   });
 }
 
@@ -392,7 +511,7 @@ async function refreshSitemap() {
   }
 }
 
-export const REFRESH_PARTS = ["community", "areas", "stats", "monthly", "hubs", "sitemap"] as const;
+export const REFRESH_PARTS = ["community", "areas", "campaigns", "stats", "monthly", "hubs", "sitemap"] as const;
 export type RefreshPart = (typeof REFRESH_PARTS)[number];
 
 // The whole refresh is 2-3 minutes of database work. Callers over HTTP run it
@@ -408,6 +527,7 @@ export async function refreshAll(
   for (const part of parts) {
     if (part === "community") await refreshCommunity(ALL);
     else if (part === "areas") await refreshAreas(null, names);
+    else if (part === "campaigns") await refreshCampaigns(names);
     else if (part === "stats") await refreshSiteStats(names);
     else if (part === "monthly") await refreshMonthly();
     else if (part === "hubs") await refreshHubs(names);

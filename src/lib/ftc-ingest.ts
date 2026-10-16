@@ -2,7 +2,8 @@ import "server-only";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 // Apply one FTC daily file (already in R2, see /api/admin/ftc/fetch) to the
-// per-number aggregates: numbers.ftc_*, ftc_monthly, ftc_states, ftc_subjects.
+// per-number aggregates: numbers.ftc_* (counts, dates and the hour, weekday,
+// city and same-area-code breakdowns), ftc_monthly, ftc_states, ftc_subjects.
 //
 // Counts are added, never replaced, and every day is applied exactly once:
 // the aggregates and the day's ftc_ingest_log row go in one D1 batch (a
@@ -20,7 +21,14 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 //     file's date, else Created_Date;
 //   * state: Consumer_State trimmed, empty not counted;
 //   * subject: Subject trimmed, empty is "(not given)";
-//   * robocall: Recorded_Message_Or_Robocall == "Y".
+//   * robocall: Recorded_Message_Or_Robocall == "Y";
+//   * hour: Violation_Date's hh, only when Violation_Date is the complaint's
+//     date and its time isn't exactly 00:00 or 12:00 (form defaults); weekday
+//     (0 = Sunday) of that date, only when it is Violation_Date and exists;
+//   * local: Consumer_Area_Code equals the number's area code;
+//   * city: city() below, as "City|ST"; a number keeps its 10 commonest — the
+//     day's counts cut to 10, added to the stored ones, cut to 10 again (count
+//     desc, then name).
 
 const HEADER = "Company_Phone_Number,Created_Date,Violation_Date,Consumer_City,Consumer_State,Consumer_Area_Code,Subject,Recorded_Message_Or_Robocall";
 const NO_SUBJECT = "(not given)";
@@ -34,6 +42,66 @@ const DEDUPE_SEARCH_DAYS = 21;
 // would turn a day into thousands of statements; this keeps it to dozens,
 // each well under D1's 100 KB statement limit.
 const ROWS_PER_STATEMENT = 1000;
+// The numbers upsert carries JSON breakdowns, so it is cut by size instead,
+// well under the 100 KB limit.
+const NUMBERS_STATEMENT_BYTES = 80_000;
+const TOP_CITIES = 10;
+
+const STATES: Record<string, string> = {
+  Alabama: "AL", Alaska: "AK", Arizona: "AZ", Arkansas: "AR", California: "CA", Colorado: "CO", Connecticut: "CT",
+  Delaware: "DE", "District of Columbia": "DC", Florida: "FL", Georgia: "GA", Hawaii: "HI", Idaho: "ID",
+  Illinois: "IL", Indiana: "IN", Iowa: "IA", Kansas: "KS", Kentucky: "KY", Louisiana: "LA", Maine: "ME",
+  Maryland: "MD", Massachusetts: "MA", Michigan: "MI", Minnesota: "MN", Mississippi: "MS", Missouri: "MO",
+  Montana: "MT", Nebraska: "NE", Nevada: "NV", "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM",
+  "New York": "NY", "North Carolina": "NC", "North Dakota": "ND", Ohio: "OH", Oklahoma: "OK", Oregon: "OR",
+  Pennsylvania: "PA", "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD", Tennessee: "TN",
+  Texas: "TX", Utah: "UT", Vermont: "VT", Virginia: "VA", Washington: "WA", "West Virginia": "WV",
+  Wisconsin: "WI", Wyoming: "WY", "Puerto Rico": "PR", Guam: "GU", "Virgin Islands": "VI",
+  "U.S. Virgin Islands": "VI", "American Samoa": "AS", "Northern Mariana Islands": "MP",
+};
+const STATE_WORDS = new Set([...Object.keys(STATES), ...Object.values(STATES)].map((w) => w.toLowerCase()));
+const TRAILING_STATE = new RegExp(
+  `,? +(${[...STATE_WORDS].sort((a, b) => b.length - a.length || (a < b ? -1 : 1)).map((w) => w.replace(/[.]/g, "\\.")).join("|")})$`
+);
+const CITY_ALIAS: Record<string, string> = { nyc: "new york", "new york city": "new york" };
+const trimPunct = (s: string) => s.replace(/^[ ,.;-]+|[ ,.;-]+$/g, "");
+
+// Consumer_City as "City|ST", or null. Free text: lower-cased, ZIP and a
+// trailing state dropped, anything but letters, space and .'- rejected.
+export function city(raw: string, state: string): string | null {
+  const st = STATES[state.trim()];
+  if (!st) return null;
+  let c = trimPunct(raw.replace(/[ \t\r\n]+/g, " ")).toLowerCase();
+  c = c.replace(/[ ,]+[0-9]{5}(-[0-9]{4})?$/, "");
+  c = trimPunct(c.replace(TRAILING_STATE, ""));
+  c = CITY_ALIAS[c] ?? c;
+  if (c.length < 3 || /[^a-z .'-]/.test(c) || STATE_WORDS.has(c)) return null;
+  c = c.replace(/(^|[ .'-])([a-z])/g, (_, p: string, l: string) => p + l.toUpperCase());
+  c = c.replace(/\bMc([a-z])/g, (_, l: string) => "Mc" + l.toUpperCase());
+  return `${c}|${st}`;
+}
+
+export function topCities(counts: Map<string, number> | Record<string, number>): Record<string, number> {
+  const entries = counts instanceof Map ? [...counts] : Object.entries(counts);
+  return Object.fromEntries(entries.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, TOP_CITIES));
+}
+
+// 0 = Sunday, or null when the date doesn't exist (yyyymmdd allows 31 in any month).
+function weekday(d: number): number | null {
+  const y = Math.floor(d / 10000), m = Math.floor(d / 100) % 100, day = d % 100;
+  const t = new Date(Date.UTC(y, m - 1, day));
+  return t.getUTCMonth() === m - 1 && t.getUTCDate() === day ? t.getUTCDay() : null;
+}
+
+// SQL that adds two sparse JSON count objects, {"9":2} + {"9":1,"14":1};
+// with a limit, keeps the largest counts (ties by key). Used inside the
+// numbers upsert, so a day is still one transaction.
+function mergeCounts(col: string, limit?: number) {
+  return `${col} = CASE WHEN excluded.${col} IS NULL THEN numbers.${col} WHEN numbers.${col} IS NULL THEN excluded.${col}
+    ELSE (SELECT json_group_object(key, n) FROM (
+      SELECT key, sum(value) AS n FROM (SELECT key, value FROM json_each(numbers.${col}) UNION ALL SELECT key, value FROM json_each(excluded.${col}))
+      GROUP BY key ORDER BY n DESC, key${limit ? ` LIMIT ${limit}` : ""})) END`;
+}
 
 export function rawKey(day: string) {
   return `ftc/raw/${day.slice(0, 4)}/DNC_Complaint_Numbers_${day}.csv`;
@@ -144,6 +212,15 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
   const monthly = new Map<string, number>();
   const states = new Map<string, number>();
   const subjects = new Map<string, number>(); // key `${phone}\u001f${subjectName}`
+  const hours = new Map<number, Record<string, number>>();
+  const wdays = new Map<number, Record<string, number>>();
+  const local = new Map<number, number>();
+  const dayCities = new Map<number, Map<string, number>>();
+  const add = (m: Map<number, Record<string, number>>, p: number, k: number) => {
+    let o = m.get(p);
+    if (!o) m.set(p, (o = {}));
+    o[k] = (o[k] ?? 0) + 1;
+  };
   let records = 0;
   let complaints = 0;
   const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
@@ -159,7 +236,8 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
     const p = phone(r[0]);
     if (p === null) continue;
     let d = yyyymmdd(r[2]);
-    if (d === null || d > fileDay || d < oldestCall) d = yyyymmdd(r[1]);
+    const byCall = !(d === null || d > fileDay || d < oldestCall);
+    if (!byCall) d = yyyymmdd(r[1]);
     if (d === null) continue;
     complaints++;
     total.set(p, (total.get(p) ?? 0) + 1);
@@ -170,6 +248,23 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
     const st = r[4].trim();
     if (st) bump(states, `${p}\u001f${st}`);
     bump(subjects, `${p}\u001f${r[6].trim() || NO_SUBJECT}`);
+    if (byCall) {
+      const w = weekday(d);
+      if (w !== null) add(wdays, p, w);
+      const t = /^[^ ]+ ([0-9]{1,2}):([0-9]{2})/.exec(r[2]);
+      if (t) {
+        const hh = Number(t[1]), mm = Number(t[2]);
+        if (hh < 24 && !(mm === 0 && (hh === 0 || hh === 12))) add(hours, p, hh);
+      }
+    }
+    const ac = r[5].trim();
+    if (/^[0-9]+$/.test(ac) && Number(ac) === Math.floor(p / 10_000_000)) local.set(p, (local.get(p) ?? 0) + 1);
+    const c = city(r[3], r[4]);
+    if (c) {
+      let m = dayCities.get(p);
+      if (!m) dayCities.set(p, (m = new Map()));
+      m.set(c, (m.get(c) ?? 0) + 1);
+    }
   }
 
   // Subject names get small integer ids; new names are added first so the
@@ -188,16 +283,31 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
   const chunked = <T,>(items: T[], render: (rows: T[]) => string) => {
     for (let i = 0; i < items.length; i += ROWS_PER_STATEMENT) statements.push(render(items.slice(i, i + ROWS_PER_STATEMENT)));
   };
-  chunked([...total.keys()], (ps) =>
-    `INSERT INTO numbers (phone, ftc_total, ftc_robocall, ftc_first, ftc_last) VALUES ${ps
-      .map((p) => `(${p},${total.get(p)},${robo.get(p) ?? 0},${first.get(p)},${last.get(p)})`)
-      .join(",")}
-     ON CONFLICT (phone) DO UPDATE SET
-       ftc_total = ftc_total + excluded.ftc_total,
-       ftc_robocall = ftc_robocall + excluded.ftc_robocall,
-       ftc_first = min(coalesce(ftc_first, excluded.ftc_first), excluded.ftc_first),
-       ftc_last = max(coalesce(ftc_last, excluded.ftc_last), excluded.ftc_last)`
-  );
+  const json = (o: Record<string, number> | undefined) => (o ? q(JSON.stringify(o)) : "NULL");
+  const numberRows = [...total.keys()].map((p) => {
+    const cs = dayCities.get(p);
+    return `(${p},${total.get(p)},${robo.get(p) ?? 0},${first.get(p)},${last.get(p)},${json(hours.get(p))},${json(wdays.get(p))},${json(cs && topCities(cs))},${local.get(p) ?? 0})`;
+  });
+  for (let i = 0; i < numberRows.length; ) {
+    const part: string[] = [];
+    let bytes = 0;
+    while (i < numberRows.length && (part.length === 0 || bytes + numberRows[i].length < NUMBERS_STATEMENT_BYTES)) {
+      bytes += numberRows[i].length + 1;
+      part.push(numberRows[i++]);
+    }
+    statements.push(
+      `INSERT INTO numbers (phone, ftc_total, ftc_robocall, ftc_first, ftc_last, ftc_hours, ftc_wdays, ftc_cities, ftc_local) VALUES ${part.join(",")}
+       ON CONFLICT (phone) DO UPDATE SET
+         ftc_total = ftc_total + excluded.ftc_total,
+         ftc_robocall = ftc_robocall + excluded.ftc_robocall,
+         ftc_first = min(coalesce(ftc_first, excluded.ftc_first), excluded.ftc_first),
+         ftc_last = max(coalesce(ftc_last, excluded.ftc_last), excluded.ftc_last),
+         ${mergeCounts("ftc_hours")},
+         ${mergeCounts("ftc_wdays")},
+         ${mergeCounts("ftc_cities", TOP_CITIES)},
+         ftc_local = ftc_local + excluded.ftc_local`
+    );
+  }
   chunked([...monthly.entries()], (es) =>
     `INSERT INTO ftc_monthly (phone, ym, n) VALUES ${es
       .map(([k, n]) => `(${k.split("\u001f").join(",")},${n})`)

@@ -7,7 +7,9 @@ import CanadaHeatmap from "@/components/CanadaHeatmap";
 import NewUiBanner from "@/components/app/NewUiBanner";
 import { all } from "@/lib/d1";
 import { formatPhone } from "@/lib/lookup";
-import { getSiteStats, getTrendingNumbers } from "@/lib/spam";
+import { getMostReported, getSiteStats, getTrendingNumbers } from "@/lib/spam";
+import { PROVINCE_PAGES } from "@/lib/provinces";
+import { HUBS } from "@/lib/hubs";
 import { regionForCode } from "@/lib/area-codes";
 import { HREFLANG_ALTERNATES } from "@/lib/i18n";
 
@@ -97,10 +99,11 @@ function StatTile({
 }
 
 export default async function Home() {
-  const [reports, stats, trending] = await Promise.all([
+  const [reports, stats, trending, mostReported] = await Promise.all([
     getRecentReports(),
     getSiteStats(),
     getTrendingNumbers(5),
+    getMostReported(),
   ]);
 
   // Every area code with data, busiest first — gives crawlers a path to all
@@ -192,8 +195,52 @@ export default async function Home() {
               </li>
             ))}
           </ul>
+          <Link href="/trending" className="mt-3 inline-block text-sm text-canada hover:underline">
+            All trending numbers →
+          </Link>
         </section>
       )}
+
+      {/* Links crawlers (and people) can follow to number pages, besides the sitemap. */}
+      {mostReported.length > 0 && (
+        <section className="pb-12">
+          <h2 className="mb-4 text-xl font-semibold text-zinc-900">Most-reported Canadian numbers</h2>
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {mostReported.map((m) => (
+              <li key={m.phone}>
+                <Link href={`/lookup/${m.phone}`} className="flex justify-between rounded-lg border border-zinc-200 px-4 py-2 text-sm hover:border-canada hover:bg-red-50">
+                  <span className="font-medium text-zinc-900">{formatPhone(m.phone)}</span>
+                  <span className="text-zinc-500">{m.n.toLocaleString("en-CA")} complaints</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="pb-12">
+        <h2 className="mb-4 text-xl font-semibold text-zinc-900">Browse by province</h2>
+        <ul className="flex flex-wrap gap-2 text-sm">
+          {PROVINCE_PAGES.map((p) => (
+            <li key={p.slug}>
+              <Link href={`/province/${p.slug}`} className="inline-block rounded-full border border-zinc-200 px-3 py-1.5 hover:border-canada hover:text-canada">{p.name}</Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="pb-12">
+        <h2 className="mb-4 text-xl font-semibold text-zinc-900">
+          <Link href="/scams" className="hover:text-canada">Scam and spam call types</Link>
+        </h2>
+        <ul className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+          {HUBS.map((h) => (
+            <li key={h.slug}>
+              <Link href={`/scams/${h.slug}`} className="text-canada hover:underline">{h.title}</Link>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       {/* Where spam is being reported across Canada. */}
       {hasProvinceData && (

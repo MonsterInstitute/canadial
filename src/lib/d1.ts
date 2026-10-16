@@ -67,6 +67,22 @@ export async function batch<T extends unknown[]>(
   return results.map((r) => r.results) as { [K in keyof T]: T[K][] };
 }
 
+// A batch for maintenance jobs (rollup refreshes): one transaction, a longer
+// deadline, and the rows it read and wrote. Never for page renders.
+export async function batchSlow(queries: Query[], deadlineMs: number): Promise<{ rowsRead: number; rowsWritten: number }> {
+  const d = await db();
+  const stmts = queries.map((q) => d.prepare(q.sql).bind(...(q.params ?? [])));
+  const results = await withDeadline(queries[0]?.sql ?? "batch", d.batch(stmts), deadlineMs);
+  let rowsRead = 0;
+  let rowsWritten = 0;
+  for (const r of results) {
+    meter(r.meta);
+    rowsRead += r.meta.rows_read ?? 0;
+    rowsWritten += r.meta.rows_written ?? 0;
+  }
+  return { rowsRead, rowsWritten };
+}
+
 export async function all<T>(sql: string, ...params: unknown[]): Promise<T[]> {
   const res = await withDeadline(sql, (await db()).prepare(sql).bind(...params).all<T>());
   meter(res.meta);
