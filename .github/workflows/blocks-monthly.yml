@@ -1,0 +1,37 @@
+name: Monthly number-block refresh
+
+# Refreshes the NPA-NXX block tables from the CNAC (Canada) and NANPA (US)
+# assignment files. The Worker downloads the files into R2 and rebuilds the
+# tables itself; this workflow only calls it, with ADMIN_TOKEN.
+
+on:
+  schedule:
+    - cron: '0 10 3 * *' # 10:00 UTC on the 3rd of each month
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      SITE: https://www.canadial.com
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download and rebuild
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          from canadial_admin import post_status
+          status, fetched = post_status("/api/admin/blocks/fetch")
+          print(status, fetched)
+          if status != 200:
+              print("::error::block file download failed"); sys.exit(1)
+          status, rebuilt = post_status("/api/admin/blocks/rebuild", {"date": fetched["date"]})
+          print(status, rebuilt)
+          if status != 200 or not rebuilt.get("swapped"):
+              print("::error::block rebuild failed or was refused; the current tables are unchanged"); sys.exit(1)
+          PY

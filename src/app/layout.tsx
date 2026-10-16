@@ -98,8 +98,29 @@ export default function RootLayout({
             </p>
 
             <nav className="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2">
+              <Link href="/trending" className="hover:text-canada">
+                Trending
+              </Link>
+              <Link href="/scams" className="hover:text-canada">
+                Call types
+              </Link>
               <Link href="/rights" className="hover:text-canada">
                 Know Your Rights
+              </Link>
+              <Link href="/about" className="hover:text-canada">
+                About
+              </Link>
+              <Link href="/methodology" className="hover:text-canada">
+                Data &amp; methodology
+              </Link>
+              <Link href="/privacy" className="hover:text-canada">
+                Privacy
+              </Link>
+              <Link href="/contact" className="hover:text-canada">
+                Contact
+              </Link>
+              <Link href="/removal" className="hover:text-canada">
+                Remove a number
               </Link>
               <Link href="/api-docs" className="hover:text-canada">
                 API

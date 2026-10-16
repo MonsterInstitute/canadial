@@ -17,13 +17,11 @@ export function formatPhone(input: string): string {
   return `(${n.slice(0, 3)}) ${n.slice(3, 6)}-${n.slice(6)}`
 }
 
-// Some legacy comments were imported with a "Reported on 800notes.com" footer.
-// We surface them as community reports, so strip any reference to the original
-// source when rendering. Display-only — the stored comment is never changed.
+// Comments are shown as written. (This used to rewrite "800notes.com" into
+// "the Canadian community", hiding where imported reports came from; pages now
+// label every report with its real source instead.)
 export function cleanComment(input: string): string {
-  return input
-    .replace(/reported on 800notes\.com/gi, "Reported by Canadian community members")
-    .replace(/\b800notes\.com\b/gi, "the Canadian community")
+  return input.trim()
 }
 
 // Whether a report originated from the US FTC Do Not Call dataset rather than a

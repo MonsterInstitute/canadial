@@ -15,11 +15,10 @@
   // records, not custom domains: Cloudflare won't attach a custom domain to a
   // hostname that already has records, and deleting them first would leave a
   // window of NXDOMAIN that resolvers cache. canadial.com 308s to www in
-  // worker.ts. next.canadial.com was the staging host (noindex).
+  // worker.ts. next.canadial.com is the separate staging Worker (env.staging).
   "routes": [
     { "pattern": "www.canadial.com/*", "zone_name": "canadial.com" },
-    { "pattern": "canadial.com/*", "zone_name": "canadial.com" },
-    { "pattern": "next.canadial.com", "custom_domain": true }
+    { "pattern": "canadial.com/*", "zone_name": "canadial.com" }
   ],
   "d1_databases": [
     { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "migrations_dir": "migrations" },
@@ -34,6 +33,27 @@
   "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
   "env": {
+    // Staging: next.canadial.com, noindex (worker.ts). Same app database and
+    // data bucket as production (it previews new code against real data),
+    // its own ISR cache and tag cache so the two never invalidate each other.
+    "staging": {
+      "name": "canadial-staging",
+      "routes": [{ "pattern": "next.canadial.com", "custom_domain": true }],
+      "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "canadial-staging" }],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "canadial", "database_id": "5a39996f-3b4e-4ec8-a77e-ff67e754c2e4", "migrations_dir": "migrations" },
+        { "binding": "NEXT_TAG_CACHE_D1", "database_name": "canadial-staging-tags", "database_id": "49d75b31-d884-49d5-808d-5761d855592c" }
+      ],
+      "r2_buckets": [
+        { "binding": "NEXT_INC_CACHE_R2_BUCKET", "bucket_name": "canadial-staging-cache" },
+        { "binding": "FTC_DATA", "bucket_name": "canadial-data" }
+      ],
+      "durable_objects": { "bindings": [{ "name": "NEXT_CACHE_DO_QUEUE", "class_name": "DOQueueHandler" }] },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DOQueueHandler"] }],
+      "workers_dev": false,
+      "preview_urls": false,
+      "observability": { "enabled": true }
+    },
     // Used only by `next build` (see next.config.ts): pages prerendered at build
     // time read the production database, as Vercel builds read Supabase. Local
     // `next dev` uses the default (local) bindings and never touches production.

@@ -24,7 +24,7 @@ export type AreaNumber = {
 // area summaries (one row per valid code).
 export async function getAreaCodeCounts(): Promise<Record<string, number>> {
   const rows = await all<{ code: number; n: number }>(
-    "SELECT code, json_extract(payload, '$.number_count') AS n FROM area_summaries"
+    "SELECT code, json_extract(payload, '$.number_count') AS n FROM area_summaries2"
   );
   const counts: Record<string, number> = {};
   for (const r of rows) {
@@ -67,7 +67,7 @@ export async function getAreaSummary(
   // One row by primary key from the materialized area_summaries table (the
   // daily job refreshes it). No row means the code has no reported numbers.
   const row = await first<{ payload: string }>(
-    "SELECT payload FROM area_summaries WHERE code = ?",
+    "SELECT payload FROM area_summaries2 WHERE code = ?",
     Number(code)
   );
   const data: unknown = row ? JSON.parse(row.payload) : {};
@@ -93,7 +93,7 @@ export async function getAreaSummary(
 }
 
 // The number pages worth listing in the sitemap: numbers reported more than
-// once (numbers.indexable, set by refreshAll()), plus every verified
+// once (numbers.listed, set by refreshAll()), plus every verified
 // organization. The ~440k single-report numbers are deliberately left out —
 // most share a handful of boilerplate comment texts and Google already
 // declined to index them once. Phase 5 revisits this with real per-number data.
@@ -101,7 +101,7 @@ export async function getAreaSummary(
 // One partial-index read per sitemap render (daily).
 export async function getIndexableNumbers(): Promise<string[]> {
   const rows = await all<{ phone: number }>(
-    `SELECT phone FROM numbers WHERE indexable = 1
+    `SELECT phone FROM numbers WHERE listed = 1
      UNION
      SELECT phone FROM organizations WHERE phone >= 2000000000
      ORDER BY phone`
@@ -236,7 +236,7 @@ function normalizeStatsPayload(
 
 // One primary-key read of the materialized site_stats row.
 export async function getSiteStats(): Promise<SiteStats> {
-  const row = await first<{ payload: string }>("SELECT payload FROM site_stats WHERE id = 1");
+  const row = await first<{ payload: string }>("SELECT payload FROM site_stats2 WHERE id = 1");
   const norm = normalizeStatsPayload(row ? JSON.parse(row.payload) : null);
   if (!norm) throw new Error("site_stats is empty; run the refresh (src/lib/refresh.ts)");
   return deriveSiteStats(
@@ -254,22 +254,18 @@ export type TrendingNumber = {
   created_at: string;
 };
 
-// The most recently reported distinct spam numbers, newest first. Powers the
-// homepage "Trending this week" strip. 100 rows off the reports_recent index
-// gives good odds of `limit` distinct numbers without over-fetching.
+// "Trending": the numbers with the most complaints in the latest FTC daily
+// file (ftc_daily_top, written by the ingest). One primary-key range read.
 export async function getTrendingNumbers(limit = 5): Promise<TrendingNumber[]> {
-  const rows = await all<{ phone: number; type: string | null; comment: string | null; created_at: string }>(
-    `SELECT phone, type, comment, created_at FROM reports
-     WHERE hidden = 0 AND is_spam = 1 ORDER BY created_at DESC LIMIT 100`
+  const rows = await all<{ day: string; phone: number; n: number }>(
+    `SELECT day, phone, n FROM ftc_daily_top
+     WHERE day = (SELECT max(day) FROM ftc_daily_top) ORDER BY rank LIMIT ?`,
+    limit
   );
-  const seen = new Set<string>();
-  const out: TrendingNumber[] = [];
-  for (const r of rows) {
-    const pn = String(r.phone);
-    if (pn.length !== 10 || seen.has(pn)) continue;
-    seen.add(pn);
-    out.push({ phone_number: pn, type: r.type, comment: r.comment, created_at: r.created_at });
-    if (out.length >= limit) break;
-  }
-  return out;
+  return rows.map((r) => ({
+    phone_number: String(r.phone),
+    type: null,
+    comment: `${r.n.toLocaleString("en-CA")} FTC complaint${r.n === 1 ? "" : "s"} in one day`,
+    created_at: r.day,
+  }));
 }

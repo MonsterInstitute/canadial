@@ -15,7 +15,7 @@ type OrgRow = {
   slug: string | null
   website: string | null
 }
-type NumberRow = { comm_total: number; comm_spam: number; comm_top_type: string | null }
+type NumberRow = { ftc_total: number; c_total: number; c_spam: number; c_top_type: string | null }
 type ReportRow = {
   id: string
   type: string | null
@@ -48,12 +48,12 @@ export async function lookupPhone(phone: string) {
       params: [key],
     },
     {
-      sql: 'SELECT comm_total, comm_spam, comm_top_type FROM numbers WHERE phone = ?',
+      sql: 'SELECT ftc_total, c_total, c_spam, c_top_type FROM numbers WHERE phone = ?',
       params: [key],
     },
     {
       sql: `SELECT id, type, comment, created_at, source, is_spam FROM reports
-            WHERE phone = ? AND hidden = 0 ORDER BY created_at DESC LIMIT ?`,
+            WHERE phone = ? AND hidden = 0 AND source IS NOT 'ftc_dnc' ORDER BY created_at DESC LIMIT ?`,
       params: [key, LISTED_REPORTS],
     },
   ])
@@ -64,14 +64,15 @@ export async function lookupPhone(phone: string) {
   }
 
   const num = nums[0]
-  if (num && num.comm_total > 0) {
+  // Complaints = FTC complaints (aggregated) + community reports.
+  if (num && num.ftc_total + num.c_total > 0) {
     return {
       type: 'spam' as const,
       data: {
         phone_number: normalized,
-        report_count: num.comm_total,
-        spam_count: num.comm_spam,
-        most_common_type: num.comm_top_type,
+        report_count: num.ftc_total + num.c_total,
+        spam_count: num.ftc_total + num.c_spam,
+        most_common_type: num.c_top_type,
         latest_comment: reports[0]?.comment ?? null,
         reports: reports.map((r) => ({ ...r, phone_number: normalized, is_spam: r.is_spam === 1 })),
       },

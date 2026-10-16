@@ -22,10 +22,12 @@ jobs:
       ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
       # D1 holds 10 GB per database. Phase 2's FTC aggregates are the growth.
       MAX_DB_MB: '6000'
-      # Rows read by one number-page render. Measured 2-7 (lookup: org, number
-      # counters, 5 latest reports; area summary by primary key). Anything far
-      # above that is a read that scales with the data.
-      MAX_ROWS_PER_RENDER: '50'
+      # Rows read by one number-page render (src/lib/number-data.ts): single
+      # rows by primary key plus small fixed-ceiling ranges — one row per month
+      # with complaints (<= ~65), states (<= ~60), FTC categories (<= 16), 5
+      # reports, 5 neighbours. Worst case ~150 whatever the database size;
+      # anything above this bound is a read that scales with the data.
+      MAX_ROWS_PER_RENDER: '250'
       # Daily rollups must have run within this window.
       MAX_ROLLUP_AGE_HOURS: '36'
       # Core pages, area codes and the number pages worth indexing. The bound
@@ -113,5 +115,5 @@ jobs:
           grep -q 'Numbers tracked' /tmp/home.html \
             || { echo "::error::Homepage is missing its stats block — the database read is failing."; exit 1; }
           curl -fsS "$SITE/lookup/4164428848" -o /tmp/num.html
-          grep -qE 'Likely spam|Verified' /tmp/num.html \
+          grep -qE 'High risk|Medium risk|Low risk|No complaints on record|Verified organization' /tmp/num.html \
             || { echo "::error::Number page is not rendering lookup results."; exit 1; }

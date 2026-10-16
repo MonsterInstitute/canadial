@@ -25,7 +25,9 @@ type D1Meter = { rowsRead: number; rowsWritten: number; queries: number };
 const g = globalThis as typeof globalThis & { __d1Meter?: AsyncLocalStorage<D1Meter> };
 const d1Meter = (g.__d1Meter ??= new AsyncLocalStorage<D1Meter>());
 
-const NUMBER_PAGE = /^\/lookup\/[2-9]\d{9}$/;
+// Pages rendered on demand from D1 and cached per colo: number pages and
+// NPA-NXX block pages.
+const NUMBER_PAGE = /^\/(lookup\/[2-9]\d{9}|area\/[2-9]\d\d\/[2-9]\d\d)$/;
 // How long a colo keeps a number page. Writes to a number (a community report,
 // moderation) purge it explicitly; the import refreshes daily, so a day bounds
 // staleness for everything else.

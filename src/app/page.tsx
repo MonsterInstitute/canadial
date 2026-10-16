@@ -51,7 +51,7 @@ async function getRecentReports(): Promise<RecentReport[]> {
     created_at: string;
   }>(
     `SELECT id, phone, type, comment, is_spam, created_at FROM reports
-     WHERE hidden = 0 AND is_spam = 1 ORDER BY created_at DESC LIMIT 10`
+     WHERE hidden = 0 AND is_spam = 1 AND source IS NOT 'ftc_dnc' ORDER BY created_at DESC LIMIT 10`
   );
   if (rows.length === 0) throw new Error("getRecentReports: no rows returned");
   return rows.map((r) => ({
@@ -202,7 +202,7 @@ export default async function Home() {
             Spam reports across Canada
           </h2>
           <p className="mb-4 text-sm text-zinc-600">
-            Provinces shaded by how many numbers Canadians have reported.
+            Provinces shaded by how many reported numbers their area codes have.
             {stats.topProvince ? (
               <>
                 {" "}

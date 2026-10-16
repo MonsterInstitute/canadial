@@ -65,3 +65,13 @@ export const ALL_PROVINCES = [
   "Toll-free",
   "Other / Unknown",
 ];
+
+// Province pages: URL slug -> province name and its area codes.
+export const PROVINCE_PAGES: { slug: string; name: string; codes: string[] }[] = [
+  "Ontario", "Quebec", "British Columbia", "Alberta", "Manitoba", "Saskatchewan",
+  "Nova Scotia / PEI", "New Brunswick", "Newfoundland & Labrador", "Territories",
+].map((name) => ({
+  slug: name.toLowerCase().replace(/ \/ /g, "-").replace(/ & /g, "-").replace(/\s+/g, "-"),
+  name,
+  codes: Object.entries(PROVINCE_BY_CODE).filter(([, p]) => p === name).map(([c]) => c),
+}));

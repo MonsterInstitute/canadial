@@ -219,6 +219,15 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
       })
       .join(",")} ON CONFLICT (phone, subject) DO UPDATE SET n = n + excluded.n`
   );
+  // The day's busiest numbers, for "Trending today" (100 rows a day).
+  const busiest = [...total].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 100);
+  if (busiest.length) {
+    statements.push(
+      `INSERT OR REPLACE INTO ftc_daily_top (day, rank, phone, n) VALUES ${busiest
+        .map(([p, n], i) => `(${q(day)},${i + 1},${p},${n})`)
+        .join(",")}`
+    );
+  }
   statements.push(
     `INSERT INTO ftc_ingest_log (day, records, valid, sha256, r2_key, applied_at)
      VALUES (${q(day)}, ${records}, ${complaints}, ${q(sha256)}, ${q(rawKey(day))}, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`

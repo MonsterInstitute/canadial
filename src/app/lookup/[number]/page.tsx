@@ -2,40 +2,38 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import { cache } from "react";
-import { lookupPhone, formatPhone, normalizePhone } from "@/lib/lookup";
-import { cleanComment, isFtcSource, describeFtcReport, isValidAreaCode } from "@/lib/phone";
-import { getAreaSummary, type AreaNumber } from "@/lib/spam";
-import { regionForCode } from "@/lib/area-codes";
+import { formatPhone, normalizePhone, isValidAreaCode } from "@/lib/phone";
 import {
-  provinceForAreaCode,
-  numberTypeForCode,
-  countryForAreaCode,
-  isCanadianAreaCode,
-} from "@/lib/provinces";
+  countPhrase,
+  loadNumber,
+  verdict,
+  placeLabel,
+  formatDate,
+  monthLabel,
+  reportSource,
+  type NumberData,
+  type Verdict,
+} from "@/lib/number-data";
 import { SITE_NAME, SITE_URL } from "@/lib/config";
-import ReportForm, { DEFAULT_LABELS } from "@/components/ReportForm";
+import ReportForm from "@/components/ReportForm";
 import AdUnit from "@/components/AdUnit";
+import NumberActivity from "@/components/NumberActivity";
 
-// Rendered on demand from D1 and cached at Cloudflare's edge by worker.ts,
-// not ISR. There are ~336k number pages (millions after the FTC backfill),
-// most visited once by a crawler: as ISR each first visit is a cache write and
-// an R2 object, while a render here is three bounded D1 reads (see
-// lookupPhone and getAreaSummary) and the edge cache is free.
+// Every number page is built from that number's own data: FTC complaint
+// aggregates, community reports, and the NPA-NXX block it belongs to. No
+// paragraph exists that only swaps the phone number in; sections with no data
+// are left out rather than filled.
+//
+// Rendered on demand from D1 (one round trip of bounded reads, see
+// src/lib/number-data.ts) and cached at Cloudflare's edge by worker.ts.
 export const dynamic = "force-dynamic";
 
-// generateMetadata and the page render both need the lookup; cache() dedupes
-// them into a single DB call per request.
-const getLookup = cache(lookupPhone);
+const getData = cache(loadNumber);
 
 type Props = { params: Promise<{ number: string }> };
 
 // The one URL a number's page lives at, or null when the segment is not a
-// real number. Every spelling of the same number ("416-555-1234",
-// "+14165551234", "(416) 555 1234") used to render and cache its own ISR copy,
-// and junk with a plausible area code rendered a 200 "invalid number" page.
-// Now non-canonical spellings 308 to the canonical URL and junk is a 404.
-// Stricter than normalizePhone(), which keeps the LAST ten digits of anything
-// longer: here only 10 digits, or 11 with a leading 1, are a number.
+// real number: other spellings 308 to it, junk 404s, before any database work.
 function canonicalNumber(raw: string): string | null {
   let s = raw;
   try {
@@ -44,15 +42,11 @@ function canonicalNumber(raw: string): string | null {
     // Malformed escape: fall through with the raw segment.
   }
   const digits = s.replace(/\D/g, "");
-  if (!(digits.length === 10 || (digits.length === 11 && digits.startsWith("1")))) {
-    return null;
-  }
+  if (!(digits.length === 10 || (digits.length === 11 && digits.startsWith("1")))) return null;
   const n = normalizePhone(digits);
   return isValidAreaCode(n.slice(0, 3)) ? n : null;
 }
 
-// Both generateMetadata and the page call this first, so neither does any
-// database work for a URL that is about to 404 or redirect.
 function canonicalOrExit(raw: string): string {
   const canonical = canonicalNumber(raw);
   if (!canonical) notFound();
@@ -60,982 +54,330 @@ function canonicalOrExit(raw: string): string {
   return canonical;
 }
 
-type LookupResult = Awaited<ReturnType<typeof lookupPhone>>;
+const nf = (n: number) => n.toLocaleString("en-CA");
+const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / whole) : 0);
 
-// The four FAQ questions every lookup page answers, using the number's real
-// data. Shared between the visible FAQ section and the Schema.org FAQPage so the
-// rich result and the page stay in sync.
-function buildFaq(
-  pretty: string,
-  code: string,
-  region: string | null,
-  province: string,
-  result: LookupResult
-): { q: string; a: string }[] {
-  const where = region
-    ? `the ${code} area code, which serves ${region} in ${province}, Canada`
-    : `the ${code} area code in ${province}`;
-
-  let safe: string;
-  let who: string;
-  let callback: string;
-
-  if (result.type === "legitimate") {
-    const name = result.data?.name ? ` belonging to ${result.data.name}` : "";
-    safe = `Yes. ${pretty} is a verified, legitimate phone number${name}, so it is safe to answer.`;
-    who = result.data?.name
-      ? `${pretty} belongs to ${result.data.name}${
-          result.data.category ? `, a ${result.data.category}` : ""
-        }.`
-      : `${pretty} is a verified, legitimate number.`;
-    callback = `Yes, ${pretty} is a verified number, so it is safe to call back.`;
-  } else if (result.type === "spam") {
-    const n = result.data.report_count;
-    const times = `${n} time${n === 1 ? "" : "s"}`;
-    const kind = result.data.most_common_type
-      ? ` as ${result.data.most_common_type}`
-      : "";
-    safe = `Be cautious. ${pretty} has been reported ${times}${kind} by Canadians, so it is likely an unwanted or spam call. If you don't recognise it, let it go to voicemail.`;
-    who = `${pretty} has been reported ${times}${kind}. ${
-      result.data.most_common_type
-        ? `Most callers describe it as ${result.data.most_common_type}.`
-        : "Canadians have flagged it as an unwanted caller."
-    }`;
-    callback = `No. Don't call ${pretty} back — returning a spam or scam call can confirm your number is active and lead to more calls.`;
-  } else {
-    safe = `There are no reports for ${pretty} yet, so we can't confirm it is safe. If you don't recognise the number, let it go to voicemail — a legitimate caller will leave a message.`;
-    who = `Nobody has reported ${pretty} yet, so the caller is unknown. Be the first to add a report if you've had a call.`;
-    callback = `If you don't recognise ${pretty}, it is safer not to call back. Wait for a voicemail or search the number first.`;
-  }
-
-  let reportedTimes: string;
-  if (result.type === "spam") {
-    const n = result.data.report_count;
-    reportedTimes = `${pretty} has been reported ${n} time${
-      n === 1 ? "" : "s"
-    } by Canadians${
-      result.data.most_common_type
-        ? `, most often as ${result.data.most_common_type}`
-        : ""
-    }.`;
-  } else if (result.type === "legitimate") {
-    reportedTimes = `${pretty} is a verified legitimate number and has no spam reports.`;
-  } else {
-    reportedTimes = `${pretty} has not been reported yet. If you received a call from it, you can be the first to add a report.`;
-  }
-
-  return [
-    { q: `Is ${pretty} safe to answer?`, a: safe },
-    { q: `Who is calling from ${pretty}?`, a: who },
-    {
-      q: `What area is ${pretty} from?`,
-      a: `${pretty} uses ${where}.`,
-    },
-    { q: `Should I call ${pretty} back?`, a: callback },
-    { q: `How many times has ${pretty} been reported?`, a: reportedTimes },
-    {
-      q: `What area code is ${pretty} from?`,
-      a: `${pretty} is in the ${code} area code${
-        region ? `, which serves ${region}` : `, associated with ${province}`
-      }.`,
-    },
-    {
-      q: `Is ${pretty} a Canadian number?`,
-      a: isCanadianAreaCode(code)
-        ? `Yes. ${pretty} uses the ${code} area code, a Canadian area code${
-            region ? ` serving ${region}` : ` in ${province}`
-          }.`
-        : `The ${code} area code is not a recognised Canadian geographic area code, so ${pretty} may be a toll-free or non-Canadian number.`,
-    },
-  ];
-}
-
-// Schema.org structured data: a breadcrumb plus the page's FAQ, for rich
-// results. The FAQ gives Google indexable content even when a number has few or
-// no reports.
-function buildJsonLd(number: string, pretty: string, result: LookupResult) {
-  const code = number.slice(0, 3);
-  const url = `${SITE_URL}/lookup/${number}`;
-  const region = regionForCode(code);
-  const province = provinceForAreaCode(code);
-
-  const faq = buildFaq(pretty, code, region, province, result);
-
-  return {
-    "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@type": "BreadcrumbList",
-        itemListElement: [
-          { "@type": "ListItem", position: 1, name: "Home", item: SITE_URL },
-          {
-            "@type": "ListItem",
-            position: 2,
-            name: `Area code ${code}`,
-            item: `${SITE_URL}/area/${code}`,
-          },
-          { "@type": "ListItem", position: 3, name: pretty, item: url },
-        ],
-      },
-      {
-        "@type": "FAQPage",
-        mainEntity: faq.map(({ q, a }) => ({
-          "@type": "Question",
-          name: q,
-          acceptedAnswer: { "@type": "Answer", text: a },
-        })),
-      },
-    ],
-  };
+function originPhrase(d: NumberData): string | null {
+  if (d.tollFree) return "toll-free number";
+  if (d.block?.status === "unassigned") return "unassigned block";
+  return placeLabel(d);
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { number } = await params;
-  const normalized = canonicalOrExit(number);
-  const pretty = formatPhone(normalized);
-
-  // Build a unique-per-number title and description from real data, varied by
-  // whether the number is spam, verified, or unknown.
-  const result = await getLookup(number);
-  const code = normalized.slice(0, 3);
-  const region = regionForCode(code);
-  const province = provinceForAreaCode(code);
-  // regionForCode already includes the province abbreviation (e.g. "Toronto,
-  // ON"), so use it as-is; fall back to the full province name when unknown.
-  const place = region ?? province;
+  const { number: raw } = await params;
+  const n = canonicalOrExit(raw);
+  const d = await getData(n);
+  const pretty = formatPhone(n);
+  const v = verdict(d);
+  const total = d.ftc.total + d.community.total;
+  const origin = originPhrase(d);
+  const robo = d.ftc.total >= 3 ? pct(d.ftc.robocalls, d.ftc.total) : 0;
 
   let title: string;
-  let description: string;
-  if (result.type === "legitimate") {
-    const org = result.data?.name ? ` belonging to ${result.data.name}` : "";
-    title = `${pretty} — Verified Legitimate | ${SITE_NAME}`;
-    description = `${pretty} is a verified legitimate number${org}. Located in ${place}. Check contact details, category, and links on Canadial.`;
-  } else if (result.type === "spam") {
-    const type = result.data.most_common_type ?? "spam";
-    const n = result.data.report_count;
-    title = `Is ${pretty} a Scam? ${n} Report${n === 1 ? "" : "s"} | ${SITE_NAME}`;
-    description = `${pretty} has been reported ${n} time${
-      n === 1 ? "" : "s"
-    } as ${type} by Canadians. Located in ${place}. See community reports and protect yourself.`;
-  } else {
-    title = `${pretty} — Canadian Phone Lookup | ${SITE_NAME}`;
-    description = `Look up ${pretty}, a phone number in ${place}, Canada. Check if this number is spam or legitimate. Free community-powered lookup.`;
+  if (d.org) title = `${pretty} — ${d.org.name ?? "verified organization"} (verified)`;
+  else if (total === 0) title = `${pretty} — no complaints on record${origin ? ` — ${origin}` : ""}`;
+  else title = `${pretty}: ${countPhrase(d.ftc.total, d.community.total)}${robo >= 50 ? `, ${robo}% robocalls` : ""}${origin ? ` — ${origin}` : ""}`;
+
+  const desc: string[] = [];
+  if (d.ftc.total) {
+    const range = d.ftc.first && d.ftc.last ? ` between ${monthLabel(d.ftc.first.slice(0, 7))} and ${monthLabel(d.ftc.last.slice(0, 7))}` : "";
+    const top = d.ftc.subjects.find((s) => s.label !== "Not specified / other");
+    desc.push(`${nf(d.ftc.total)} FTC complaint${d.ftc.total === 1 ? "" : "s"}${range}${top ? `, most often about ${top.label.toLowerCase()} (${pct(top.n, d.ftc.total)}%)` : ""}.`);
   }
+  if (d.community.total) desc.push(`${nf(d.community.total)} community report${d.community.total === 1 ? "" : "s"}.`);
+  if (d.block?.status === "unassigned") desc.push("Its number block isn't assigned to any carrier: the caller ID was likely spoofed.");
+  else if (d.block?.carrier) desc.push(`Number block assigned to ${d.block.carrier}${placeLabel(d) ? ` in ${placeLabel(d)}` : ""}.`);
+  if (!desc.length) desc.push(`${v.label}.`);
 
   return {
-    title: { absolute: title },
-    description,
-    alternates: { canonical: `/lookup/${normalized}` },
+    title: { absolute: `${title} | ${SITE_NAME}` },
+    description: desc.join(" "),
+    alternates: { canonical: `/lookup/${n}` },
+    openGraph: { title, description: desc.join(" "), url: `${SITE_URL}/lookup/${n}` },
   };
 }
 
-function Badge({
-  color,
-  label,
-}: {
-  color: "green" | "red" | "grey";
-  label: string;
-}) {
-  const styles = {
-    green: "bg-green-100 text-green-800 ring-green-600/20",
-    red: "bg-red-100 text-canada ring-red-600/20",
-    grey: "bg-zinc-100 text-zinc-700 ring-zinc-500/20",
-  }[color];
+const LEVEL_STYLE: Record<Verdict["level"], string> = {
+  high: "border-red-300 bg-red-50 text-red-900",
+  medium: "border-amber-300 bg-amber-50 text-amber-900",
+  low: "border-yellow-200 bg-yellow-50 text-yellow-900",
+  none: "border-zinc-200 bg-zinc-50 text-zinc-800",
+  verified: "border-emerald-300 bg-emerald-50 text-emerald-900",
+};
+
+function Section({ title, children, id }: { title: string; children: React.ReactNode; id?: string }) {
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ring-1 ring-inset ${styles}`}
-    >
-      {label}
-    </span>
+    <section className="mt-8" id={id}>
+      <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
+      <div className="mt-3">{children}</div>
+    </section>
   );
 }
 
-// Warm, non-judgmental reassurance shown below the badge for spam numbers.
-function ReassuranceBox({
-  tone,
-  title,
-  children,
-}: {
-  tone: "blue" | "grey";
-  title: string;
-  children: React.ReactNode;
-}) {
-  const styles =
-    tone === "blue"
-      ? "bg-blue-50 border-blue-200 text-blue-900"
-      : "bg-zinc-50 border-zinc-200 text-zinc-700";
+function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <div className={`mt-4 rounded-xl border p-5 ${styles}`}>
-      <p className="font-semibold leading-snug">{title}</p>
-      <p className="mt-1.5 text-sm leading-relaxed">{children}</p>
+    <div className="rounded-lg border border-zinc-200 p-3">
+      <div className="text-xl font-bold text-zinc-900">{value}</div>
+      <div className="text-xs text-zinc-500">{label}</div>
     </div>
   );
 }
 
-function Reassurance({
-  reports,
-  mostCommonType,
-}: {
-  reports: { type?: string | null; comment?: string | null }[];
-  mostCommonType: string | null;
-}) {
-  const types = new Set(
-    [mostCommonType, ...reports.map((r) => r.type)].filter(Boolean) as string[]
-  );
-  const commentText = reports
-    .map((r) => r.comment ?? "")
-    .join(" ")
-    .toLowerCase();
-
-  const isCraScam = types.has("Scam") && /cra|tax|arrest/.test(commentText);
-  const isDebt = types.has("Debt Collector");
-  const isTelemarketer = !isCraScam && !isDebt && types.has("Telemarketer");
-
-  if (isCraScam) {
-    return (
-      <ReassuranceBox tone="blue" title="Take a breath — this is a known scam. 🍁">
-        Real CRA agents never threaten arrest, never ask for gift cards, and
-        never demand immediate payment over the phone. If you&apos;re worried
-        about your taxes, call CRA directly at{" "}
-        <a className="font-semibold underline" href="tel:+18009598281">
-          1-800-959-8281
-        </a>
-        . You are not in trouble.
-      </ReassuranceBox>
-    );
-  }
-  if (isDebt) {
-    return (
-      <ReassuranceBox
-        tone="blue"
-        title="You have rights. Canadian law protects you. 🍁"
-      >
-        Debt collectors cannot threaten you, call before 7am or after 9pm, or
-        contact your employer. You don&apos;t have to face this alone. Learn
-        about your rights at the{" "}
-        <a
-          className="font-semibold underline"
-          href="https://www.canada.ca/en/financial-consumer-agency.html"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Financial Consumer Agency of Canada
-        </a>
-        .
-      </ReassuranceBox>
-    );
-  }
-  if (isTelemarketer) {
-    return (
-      <ReassuranceBox
-        tone="grey"
-        title="Tired of unwanted calls? You can stop most of them for free."
-      >
-        Register your number at{" "}
-        <a
-          className="font-semibold underline"
-          href="https://lnnte-dncl.gc.ca/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Canada&apos;s Do Not Call List
-        </a>{" "}
-        — it only takes 2 minutes and it&apos;s free.
-      </ReassuranceBox>
-    );
-  }
+// Complaints per month as a small server-rendered SVG bar chart.
+function MonthlyChart({ months }: { months: { ym: string; n: number }[] }) {
+  const max = Math.max(...months.map((m) => m.n), 1);
+  const w = 640;
+  const h = 120;
+  const gap = months.length > 40 ? 1 : 2;
+  const bw = Math.max(2, (w - gap * months.length) / months.length);
+  const first = months[0]?.ym;
+  const last = months[months.length - 1]?.ym;
   return (
-    <ReassuranceBox
-      tone="grey"
-      title="Don't call back. Don't press any numbers."
-    >
-      If this call made you worried, you&apos;re not alone — millions of
-      Canadians receive scam calls every year. Report it below to protect
-      others.
-    </ReassuranceBox>
+    <figure>
+      <svg viewBox={`0 0 ${w} ${h + 18}`} className="w-full" role="img" aria-label={`FTC complaints per month, ${first ? monthLabel(first) : ""} to ${last ? monthLabel(last) : ""}`}>
+        {months.map((m, i) => {
+          const bh = m.n ? Math.max(2, (m.n / max) * h) : 0;
+          return (
+            <rect key={m.ym} x={i * (bw + gap)} y={h - bh} width={bw} height={bh} className="fill-red-500">
+              <title>{`${monthLabel(m.ym)}: ${nf(m.n)}`}</title>
+            </rect>
+          );
+        })}
+        <line x1="0" y1={h} x2={w} y2={h} className="stroke-zinc-300" />
+        {first && <text x="0" y={h + 14} className="fill-zinc-500 text-[11px]">{monthLabel(first)}</text>}
+        {last && last !== first && <text x={w} y={h + 14} textAnchor="end" className="fill-zinc-500 text-[11px]">{monthLabel(last)}</text>}
+      </svg>
+      <figcaption className="mt-1 text-xs text-zinc-500">FTC complaints per month (by call date); peak {nf(max)} in a month.</figcaption>
+    </figure>
   );
 }
 
-// Format an ISO timestamp as a short, human date (e.g. "Jun 12, 2026").
-function formatReportDate(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// A compact list of other reported numbers in the same area code, with a link
-// through to the full area-code page. Used on both spam and unknown numbers so
-// every lookup page has substantive, internally-linked content.
-function RelatedNumbers({
-  related,
-  code,
-  region,
-  title,
-  intro,
-}: {
-  related: AreaNumber[];
-  code: string;
-  region: string | null;
-  title: string;
-  intro: string;
-}) {
+function Bars({ rows, total }: { rows: { label: string; n: number }[]; total: number }) {
   return (
-    <section className="mt-8">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="mt-1 text-sm text-zinc-600">{intro}</p>
-      {related.length > 0 ? (
-        <ul className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200">
-          {related.map((n) => (
-            <li key={n.phone_number}>
-              <Link
-                href={`/lookup/${n.phone_number}`}
-                className="flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-zinc-50"
-              >
-                <div className="min-w-0">
-                  <div className="font-medium text-zinc-900">
-                    {formatPhone(n.phone_number)}
-                  </div>
-                  {n.latest_comment && (
-                    <p className="truncate text-sm text-zinc-500">
-                      {cleanComment(n.latest_comment)}
-                    </p>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-medium text-canada">
-                    {n.most_common_type || "Spam"}
-                  </span>
-                  <span className="text-xs text-zinc-400">
-                    {n.report_count} report{n.report_count === 1 ? "" : "s"}
-                  </span>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-500">
-          No other numbers have been reported in the {code} area code yet.
-        </p>
-      )}
-      <Link
-        href={`/area/${code}`}
-        className="mt-3 inline-block text-sm font-medium text-canada hover:underline"
-      >
-        See all reported numbers in area code {code}
-        {region ? ` (${region})` : ""} →
-      </Link>
-    </section>
-  );
-}
-
-// Area-code facts plus generic spam-spotting tips. Shown for numbers with no
-// reports so the page still carries useful, indexable content.
-function AreaInfoAndTips({
-  pretty,
-  code,
-  region,
-  province,
-}: {
-  pretty: string;
-  code: string;
-  region: string | null;
-  province: string;
-}) {
-  return (
-    <>
-      <section className="mt-6 rounded-xl border border-zinc-200 p-5">
-        <h2 className="text-lg font-semibold">About the {code} area code</h2>
-        <dl className="mt-3 grid grid-cols-1 gap-1 text-sm text-zinc-600 sm:grid-cols-2">
-          <div>
-            <dt className="inline font-medium text-zinc-700">Area code: </dt>
-            <dd className="inline">{code}</dd>
+    <ul className="space-y-2">
+      {rows.map((r) => (
+        <li key={r.label} className="text-sm">
+          <div className="flex justify-between gap-3">
+            <span className="text-zinc-700">{r.label}</span>
+            <span className="tabular-nums text-zinc-500">{nf(r.n)} · {pct(r.n, total)}%</span>
           </div>
-          {region && (
-            <div>
-              <dt className="inline font-medium text-zinc-700">Region: </dt>
-              <dd className="inline">{region}</dd>
-            </div>
-          )}
-          <div>
-            <dt className="inline font-medium text-zinc-700">Province: </dt>
-            <dd className="inline">{province}</dd>
+          <div className="mt-1 h-1.5 rounded bg-zinc-100">
+            <div className="h-1.5 rounded bg-zinc-400" style={{ width: `${Math.max(1, pct(r.n, total))}%` }} />
           </div>
-          <div>
-            <dt className="inline font-medium text-zinc-700">Country: </dt>
-            <dd className="inline">Canada 🍁</dd>
-          </div>
-        </dl>
-        <p className="mt-3 text-sm leading-relaxed text-zinc-600">
-          {pretty} is a Canadian phone number in the {code} area code
-          {region ? `, which serves ${region}` : ""}. Numbers in this area code
-          are based in {province}. Browse the{" "}
-          <Link
-            href={`/area/${code}`}
-            className="font-medium text-canada hover:underline"
-          >
-            {code} area code page
-          </Link>{" "}
-          to see which numbers nearby have been reported for spam or scams.
-        </p>
-      </section>
-
-      <section className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
-        <h2 className="text-lg font-semibold">How to spot a spam or scam call</h2>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700">
-          <li>
-            Real organizations — including the CRA, banks, and police — never
-            threaten arrest or demand immediate payment in gift cards or
-            e-transfers over the phone.
-          </li>
-          <li>
-            Scammers often spoof a local number, so a familiar area code like{" "}
-            {code} does not guarantee the caller is who they claim to be.
-          </li>
-          <li>
-            If you didn&apos;t recognize the number, let it go to voicemail — a
-            legitimate caller will leave a message.
-          </li>
-          <li>
-            Never press a button to &quot;opt out&quot; of a robocall; it only
-            confirms your line is active and invites more calls.
-          </li>
-          <li>
-            If a call feels suspicious, hang up and call the organization back
-            using a number from their official website.
-          </li>
-        </ul>
-      </section>
-    </>
+        </li>
+      ))}
+    </ul>
   );
 }
 
-// "About this number" — area-code facts that are true for every valid number,
-// so even thin pages carry concrete, unique-per-number information.
-function AboutThisNumber({
-  pretty,
-  code,
-  region,
-  province,
-}: {
-  pretty: string;
-  code: string;
-  region: string | null;
-  province: string;
-}) {
-  const rows: [string, string][] = [
-    ["Phone number", pretty],
-    ["Area code", region ? `${code} — serves ${region}` : code],
-    ["Province", province],
-    ["Country", countryForAreaCode(code)],
-    ["Number type", numberTypeForCode(code)],
-    [
-      "Origin",
-      isCanadianAreaCode(code)
-        ? "Canadian number"
-        : "Not a recognised Canadian area code",
-    ],
-  ];
-  return (
-    <section className="mt-8 rounded-xl border border-zinc-200 p-5">
-      <h2 className="text-lg font-semibold">About this number</h2>
-      <dl className="mt-3 grid grid-cols-1 gap-1 text-sm text-zinc-600 sm:grid-cols-2">
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <dt className="inline font-medium text-zinc-700">{label}: </dt>
-            <dd className="inline">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="mt-3 text-sm leading-relaxed text-zinc-600">
-        {pretty} uses the {code} area code
-        {region ? `, which serves ${region}` : ""}. Numbers in this area code are
-        based in {province}
-        {isCanadianAreaCode(code) ? ", Canada" : ""}.
-      </p>
-    </section>
-  );
-}
-
-// "About area code [XXX]" — aggregate community stats for the whole area code,
-// giving each number page unique regional context beyond the single number.
-function AreaCodeInsights({
-  code,
-  region,
-  province,
-  reportedNumberCount,
-  topType,
-  reportTotal,
-}: {
-  code: string;
-  region: string | null;
-  province: string;
-  reportedNumberCount: number;
-  topType: string | null;
-  reportTotal: number;
-}) {
-  const place = region ?? `the ${code} area code`;
-  const nf = (n: number) => n.toLocaleString("en-CA");
-  return (
-    <section className="mt-8 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
-      <h2 className="text-lg font-semibold">About area code {code}</h2>
-      <dl className="mt-3 grid grid-cols-1 gap-1 text-sm text-zinc-600 sm:grid-cols-2">
-        <div>
-          <dt className="inline font-medium text-zinc-700">
-            Province / region:{" "}
-          </dt>
-          <dd className="inline">{region ?? province}</dd>
-        </div>
-        <div>
-          <dt className="inline font-medium text-zinc-700">
-            Numbers reported here:{" "}
-          </dt>
-          <dd className="inline">{nf(reportedNumberCount)}</dd>
-        </div>
-        <div>
-          <dt className="inline font-medium text-zinc-700">
-            Most common call type:{" "}
-          </dt>
-          <dd className="inline">{topType ?? "—"}</dd>
-        </div>
-      </dl>
-      {reportedNumberCount > 0 ? (
-        <p className="mt-3 text-sm leading-relaxed text-zinc-600">
-          Numbers like this one have been reported{" "}
-          <strong>{nf(reportTotal)}</strong> time
-          {reportTotal === 1 ? "" : "s"} in the {place} area
-          {topType ? (
-            <>
-              , most often as <strong>{topType}</strong>
-            </>
-          ) : null}
-          .{" "}
-          <Link
-            href={`/area/${code}`}
-            className="font-medium text-canada hover:underline"
-          >
-            See all reported {code} numbers →
-          </Link>
-        </p>
-      ) : (
-        <p className="mt-3 text-sm leading-relaxed text-zinc-600">
-          No spam numbers have been reported in the {code} area code yet. Help
-          Canadians by reporting any suspicious calls you receive from {place}.
-        </p>
-      )}
-    </section>
-  );
-}
-
-// "What to do if you receive this call" — concrete next steps keyed to the kind
-// of call. `type` is the most common reported type, or null for unknown numbers.
-function WhatToDo({ type }: { type: string | null }) {
-  let body: React.ReactNode;
-  switch (type) {
-    case "Scam":
-      body = (
-        <>
-          Do not call back and do not provide personal information. Report it to
-          the Canadian Anti-Fraud Centre at{" "}
-          <a className="font-semibold underline" href="tel:+18884958501">
-            1-888-495-8501
-          </a>
-          .
-        </>
-      );
-      break;
-    case "Debt Collector":
-      body = (
-        <>
-          You have rights under Canadian law. Debt collectors cannot call before
-          7am or after 9pm. Contact the FCAC at{" "}
-          <a className="font-semibold underline" href="tel:+18664613222">
-            1-866-461-3222
-          </a>{" "}
-          if you feel harassed.
-        </>
-      );
-      break;
-    case "Telemarketer":
-      body = (
-        <>
-          Register for Canada&apos;s Do Not Call List at{" "}
-          <a
-            className="font-semibold underline"
-            href="https://lnnte-dncl.gc.ca/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            lnnte-dncl.gc.ca
-          </a>{" "}
-          to stop unwanted calls.
-        </>
-      );
-      break;
-    case "Robocall":
-      body = (
-        <>
-          Do not press any numbers. Hang up immediately. Report it to the CRTC at{" "}
-          <a
-            className="font-semibold underline"
-            href="https://crtc.gc.ca/"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            crtc.gc.ca
-          </a>
-          .
-        </>
-      );
-      break;
-    default:
-      body = (
-        <>
-          If you&apos;re unsure, let it go to voicemail. Legitimate callers will
-          leave a message.
-        </>
-      );
+function buildFaq(d: NumberData, pretty: string, v: Verdict): { q: string; a: string }[] {
+  const faq: { q: string; a: string }[] = [];
+  const place = placeLabel(d);
+  if (d.org) {
+    faq.push({ q: `Who owns ${pretty}?`, a: `${pretty} is listed as ${d.org.name}${d.org.department ? `, ${d.org.department}` : ""}.` });
+  } else if (d.block?.status === "unassigned") {
+    faq.push({ q: `Who called me from ${pretty}?`, a: `Nobody can have this number as a working line: its block isn't assigned to any phone carrier (${d.block.source}, ${formatDate(d.block.asOf)}). Callers showing it were most likely spoofing their caller ID.` });
+  } else if (d.block?.carrier || place) {
+    faq.push({ q: `Who called me from ${pretty}?`, a: `The number belongs to a block assigned to ${d.block?.carrier ?? "a carrier"}${place ? ` in ${place}` : ""} (${d.block?.source}, ${formatDate(d.block!.asOf)}). Numbers can move between carriers, so the caller's provider may differ.` });
   }
-  return (
-    <section className="mt-8 rounded-xl border border-zinc-200 p-5">
-      <h2 className="text-lg font-semibold">
-        What to do if you receive this call
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-zinc-700">{body}</p>
-    </section>
-  );
-}
-
-// Visible FAQ mirroring the Schema.org FAQPage, built from the same real data.
-function FaqSection({ faq }: { faq: { q: string; a: string }[] }) {
-  return (
-    <section className="mt-8">
-      <h2 className="text-lg font-semibold">Frequently asked questions</h2>
-      <dl className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-xl border border-zinc-200">
-        {faq.map(({ q, a }) => (
-          <div key={q} className="p-4">
-            <dt className="font-medium text-zinc-900">{q}</dt>
-            <dd className="mt-1 text-sm leading-relaxed text-zinc-600">{a}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
-  );
-}
-
-export default async function LookupPage({ params }: Props) {
-  const { number } = await params;
-  // 404 rather than render a page for a number that cannot exist. The imported
-  // datasets contain junk like 1111111111 and 0000000000, and each one was
-  // otherwise getting a real, indexable page. Other spellings redirect.
-  canonicalOrExit(number);
-  const pretty = formatPhone(number);
-
-  const result = await getLookup(number);
-
-  if (result.type === "invalid") {
-    return (
-      <div className="mx-auto w-full max-w-2xl px-4 py-16 text-center">
-        <Badge color="grey" label="Invalid number" />
-        <h1 className="mt-4 text-2xl font-bold">That doesn&apos;t look right</h1>
-        <p className="mt-2 text-zinc-600">
-          &quot;{number}&quot; isn&apos;t a valid 10-digit Canadian phone number.
-        </p>
-        <Link
-          href="/"
-          className="mt-6 inline-block rounded-lg bg-canada px-5 py-2.5 font-semibold text-white hover:bg-red-700"
-        >
-          Back to search
-        </Link>
-      </div>
-    );
+  const total = d.ftc.total + d.community.total;
+  if (total > 0) {
+    faq.push({ q: `Is ${pretty} a scam or spam?`, a: `${v.label}: ${v.reason}` });
+    const parts = [];
+    if (d.ftc.total) parts.push(`${nf(d.ftc.total)} complaint${d.ftc.total === 1 ? "" : "s"} to the U.S. FTC's Do Not Call registry${d.ftc.first ? ` between ${formatDate(d.ftc.first)} and ${formatDate(d.ftc.last!)}` : ""}`);
+    if (d.community.total) parts.push(`${nf(d.community.total)} community report${d.community.total === 1 ? "" : "s"} on Canadial`);
+    faq.push({ q: `How many times has ${pretty} been reported?`, a: parts.join(" and ") + "." });
   }
+  const top = d.ftc.subjects.find((s) => s.label !== "Not specified / other");
+  if (top) faq.push({ q: `What do callers from ${pretty} say?`, a: `The most common complaint category is "${top.label}" (${pct(top.n, d.ftc.total)}% of FTC complaints).` });
+  return faq;
+}
 
-  const normalized = normalizePhone(number);
-  const jsonLd = buildJsonLd(normalized, pretty, result);
+export default async function NumberPage({ params }: Props) {
+  const { number: raw } = await params;
+  const n = canonicalOrExit(raw);
+  const d = await getData(n);
+  const pretty = formatPhone(n);
+  const v = verdict(d);
+  const place = placeLabel(d);
+  const code = n.slice(0, 3);
+  const nxx = n.slice(3, 6);
+  const faq = buildFaq(d, pretty, v);
+  const totalTypes = Object.values(d.community.types).reduce((a, b) => a + b, 0);
 
-  // Area-code context, shown on every (valid) number so even thin pages carry
-  // real information. Related numbers power internal links to the area page.
-  const code = normalized.slice(0, 3);
-  const region = regionForCode(code);
-  const province = provinceForAreaCode(code);
-  const faq = buildFaq(pretty, code, region, province, result);
-
-  // Area-code context, aggregated in Postgres rather than by pulling the
-  // code's recent reports in and reducing them here. This route renders for
-  // ~336k numbers, so the summary is deliberately ~1 KB instead of ~21 KB.
-  const area = await getAreaSummary(code);
-  const related: AreaNumber[] = area.topNumbers
-    .filter((n) => n.phone_number !== normalized)
-    .slice(0, 5);
-  const areaTopType = area.topType;
-  const areaReportTotal = area.reportTotal;
-
-  // The most common type for *this* number drives the "what to do" advice;
-  // fall back to null (generic advice) for legitimate/unknown numbers.
-  const thisType = result.type === "spam" ? result.data.most_common_type : null;
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      { "@type": "WebPage", name: `${pretty} phone number lookup`, url: `${SITE_URL}/lookup/${n}` },
+      faq.length
+        ? { "@type": "FAQPage", mainEntity: faq.map((f) => ({ "@type": "Question", name: f.q, acceptedAnswer: { "@type": "Answer", text: f.a } })) }
+        : null,
+    ].filter(Boolean),
+  };
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-      <Link href="/" className="text-sm text-zinc-500 hover:text-canada">
-        ← Back to search
-      </Link>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
+      <Link href="/" className="text-sm text-zinc-500 hover:text-canada">← Back to search</Link>
 
       <header className="mt-4">
-        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-          {pretty}
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{pretty}</h1>
+        {(place || d.tollFree) && (
+          <p className="mt-1 text-sm text-zinc-500">{d.tollFree ? "Toll-free number" : place}</p>
+        )}
       </header>
 
-      {/* Status card */}
-      <section className="mt-4 rounded-xl border border-zinc-200 p-5">
-        {result.type === "legitimate" && (
-          <div>
-            <Badge color="green" label="✓ Legitimate" />
-            <h2 className="mt-3 text-lg font-semibold">
-              {result.data.name || "Verified organization"}
-            </h2>
-            <dl className="mt-2 space-y-1 text-sm text-zinc-600">
-              {result.data.category && (
-                <div>
-                  <dt className="inline font-medium text-zinc-700">Category: </dt>
-                  <dd className="inline">{result.data.category}</dd>
-                </div>
-              )}
-              {result.data.website && (
-                <div>
-                  <dt className="inline font-medium text-zinc-700">Website: </dt>
-                  <dd className="inline">
-                    <a
-                      href={result.data.website}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-canada underline"
-                    >
-                      {result.data.website}
-                    </a>
-                  </dd>
-                </div>
-              )}
-              {result.data.description && (
-                <p className="pt-1">{result.data.description}</p>
-              )}
-            </dl>
-          </div>
-        )}
-
-        {result.type === "spam" && (
-          <div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Badge color="red" label="⚠ Likely spam" />
-              <span className="text-sm text-zinc-600">
-                {result.data.spam_count} of {result.data.report_count} reports
-                flagged this number
-                {result.data.most_common_type
-                  ? ` · ${result.data.most_common_type}`
-                  : ""}
-              </span>
-            </div>
-
-            <p className="mt-3 flex flex-wrap items-center gap-x-2 text-sm text-zinc-700">
-              <span className="font-semibold">📍 {region ?? `Area code ${code}`}</span>
-              <span className="text-zinc-400">·</span>
-              <Link href={`/area/${code}`} className="text-canada hover:underline">
-                Area code {code}, {province}
-              </Link>
-            </p>
-
-            {result.data.reports?.length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-semibold text-zinc-700">
-                  Recent comments
-                </h3>
-                <ul className="mt-2 space-y-2">
-                  {result.data.reports
-                    .filter((r: { comment?: string | null }) => r.comment)
-                    .map(
-                      (
-                        r: {
-                          id?: string | number;
-                          type?: string | null;
-                          comment?: string | null;
-                          created_at?: string | null;
-                          source?: string | null;
-                        },
-                        i: number
-                      ) => {
-                        const reported = formatReportDate(r.created_at);
-                        const ftc = isFtcSource(r.source);
-                        // FTC records get structured display: a neutral badge,
-                        // a "Reported to FTC" line, and the complaint subject.
-                        const ftcParts = ftc
-                          ? describeFtcReport(r.comment)
-                          : null;
-                        return (
-                          <li
-                            key={r.id ?? i}
-                            className="rounded-lg bg-zinc-50 p-3 text-sm"
-                          >
-                            <div className="mb-1 flex flex-wrap items-center gap-2">
-                              {r.type && (
-                                <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs font-medium text-canada">
-                                  {r.type}
-                                </span>
-                              )}
-                              {ftc && (
-                                <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-600">
-                                  FTC Verified Complaint
-                                </span>
-                              )}
-                              {reported && (
-                                <span className="text-xs text-zinc-400">
-                                  Reported {reported}
-                                </span>
-                              )}
-                            </div>
-                            {ftcParts ? (
-                              <div className="space-y-0.5">
-                                {ftcParts.subject && (
-                                  <p className="text-zinc-700">
-                                    <span className="font-medium text-zinc-600">
-                                      📋 Complaint subject:
-                                    </span>{" "}
-                                    {ftcParts.subject}
-                                  </p>
-                                )}
-                                <p
-                                  className={
-                                    ftcParts.subject
-                                      ? "text-xs text-zinc-500"
-                                      : "text-zinc-700"
-                                  }
-                                >
-                                  {ftcParts.body}
-                                </p>
-                              </div>
-                            ) : (
-                              <span className="text-zinc-700">
-                                {cleanComment(r.comment ?? "")}
-                              </span>
-                            )}
-                          </li>
-                        );
-                      }
-                    )}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-
-        {result.type === "unknown" && (
-          <div>
-            <Badge color="grey" label="No reports yet" />
-            <p className="mt-3 text-sm text-zinc-600">
-              We don&apos;t have any information about this number yet. If you
-              got a call from it, help others by leaving a report below.
-            </p>
-          </div>
-        )}
+      {/* 1. Verdict */}
+      <section className={`mt-4 rounded-xl border p-5 ${LEVEL_STYLE[v.level]}`}>
+        <div className="text-sm font-semibold uppercase tracking-wide">{v.label}</div>
+        <p className="mt-1 text-sm">{v.reason}</p>
       </section>
 
-      {/* Unknown numbers: surface the report form immediately, with a prominent
-          "be the first" call to action, so the page has a clear primary task. */}
-      {result.type === "unknown" && (
-        <section className="mt-4 rounded-2xl border-2 border-canada/30 bg-red-50/60 p-5 sm:p-6">
-          <h2 className="text-xl font-bold text-zinc-900 sm:text-2xl">
-            Be the first to report this number
-          </h2>
-          <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
-            Got a call from <span className="font-semibold">{pretty}</span>? Add
-            a quick report to warn other Canadians and build its history.
-          </p>
-          <div className="mt-4">
-            <ReportForm
-              phoneNumber={normalized}
-              prominent
-              labels={{ ...DEFAULT_LABELS, submit: "Report this number 🍁" }}
-            />
+      {/* 2. Complaint history */}
+      {d.ftc.total + d.community.total > 0 && (
+        <Section title="Complaint history">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat value={nf(d.ftc.total)} label="FTC complaints" />
+            <Stat value={nf(d.community.total)} label="Community reports" />
+            {d.ftc.first && <Stat value={formatDate(d.ftc.first)} label="First complaint" />}
+            {d.ftc.last && <Stat value={formatDate(d.ftc.last)} label="Latest complaint" />}
           </div>
-        </section>
+          {d.ftc.monthly.length > 1 && <div className="mt-4"><MonthlyChart months={d.ftc.monthly} /></div>}
+          {d.ftc.total > 0 && (
+            <p className="mt-2 text-xs text-zinc-500">
+              FTC complaints are filed by consumers with the U.S. Federal Trade Commission&apos;s Do Not Call registry; they aren&apos;t verified by the FTC or by us.
+            </p>
+          )}
+        </Section>
       )}
 
-      {/* Warm reassurance tailored to the kind of spam */}
-      {result.type === "spam" && (
-        <Reassurance
-          reports={result.data.reports ?? []}
-          mostCommonType={result.data.most_common_type}
-        />
+      {/* 3. What callers claimed */}
+      {(d.ftc.subjects.length > 0 || totalTypes > 0) && (
+        <Section title="What callers claimed">
+          {d.ftc.subjects.length > 0 && (
+            <>
+              <p className="mb-3 text-sm text-zinc-600">Complaint categories chosen by FTC complainants:</p>
+              <Bars rows={d.ftc.subjects} total={d.ftc.total} />
+            </>
+          )}
+          {totalTypes > 0 && (
+            <>
+              <p className="mb-3 mt-5 text-sm text-zinc-600">Call types in community reports:</p>
+              <Bars rows={Object.entries(d.community.types).sort((a, b) => b[1] - a[1]).map(([label, n]) => ({ label, n }))} total={totalTypes} />
+            </>
+          )}
+        </Section>
       )}
 
-      {/* Concrete facts about this number — shown on every valid page */}
-      <AboutThisNumber
-        pretty={pretty}
-        code={code}
-        region={region}
-        province={province}
-      />
-
-      {/* Area-wide aggregate context, derived from the whole area code */}
-      <AreaCodeInsights
-        code={code}
-        region={region}
-        province={province}
-        reportedNumberCount={area.numberCount}
-        topType={areaTopType}
-        reportTotal={areaReportTotal}
-      />
-
-      {/* Next steps keyed to the call type. Skipped for verified numbers, where
-          the advice wouldn't apply. */}
-      {result.type !== "legitimate" && <WhatToDo type={thisType} />}
-
-      {/* Generic area facts + spotting tips for numbers with no reports yet. */}
-      {result.type === "unknown" && (
-        <AreaInfoAndTips
-          pretty={pretty}
-          code={code}
-          region={region}
-          province={province}
-        />
-      )}
-
-      {/* Related numbers in this area code — internal links to nearby reports */}
-      <RelatedNumbers
-        related={related}
-        code={code}
-        region={region}
-        title={`Related numbers in area code ${code}`}
-        intro={`Other reported numbers in the ${code} area code${
-          region ? ` (${region})` : ""
-        }, with their reported type and report count.`}
-      />
-
-      {/* FAQ built from this number's real data */}
-      <FaqSection faq={faq} />
-
-      {/* Ad */}
       <AdUnit className="mt-8" />
 
-      {/* Report form. For unknown numbers this already appears prominently near
-          the top, so we don't repeat it here. */}
-      {result.type !== "unknown" && (
-        <section className="mt-8">
-          <h2 className="mb-3 text-lg font-semibold">Report this number</h2>
-          <div className="rounded-xl border border-zinc-200 p-5">
-            <ReportForm phoneNumber={normalized} />
+      {/* 4. Origin */}
+      <Section title="Where the number is from">
+        {d.tollFree ? (
+          <p className="text-sm text-zinc-700">
+            {pretty} is a toll-free number. Toll-free numbers aren&apos;t tied to a place, and no public record shows which company holds them.
+          </p>
+        ) : d.block?.status === "unassigned" ? (
+          <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <strong>The caller ID was likely spoofed.</strong> {pretty} is in a block that isn&apos;t assigned to any phone carrier ({d.block.source} records, {formatDate(d.block.asOf)}), so no working line can have this number. Scam callers often fake caller IDs like this.
+          </p>
+        ) : d.block ? (
+          <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+            {place && <div><dt className="text-zinc-500">Location of the number block</dt><dd className="font-medium">{place}{d.block.country === "CA" ? ", Canada" : ", USA"}</dd></div>}
+            {d.block.carrier && <div><dt className="text-zinc-500">Block assigned to</dt><dd className="font-medium">{d.block.carrier}</dd></div>}
+            <p className="text-xs text-zinc-500 sm:col-span-2">
+              From {d.block.source === "CNAC" ? "the Canadian Numbering Administrator" : "the North American Numbering Plan Administrator"} ({formatDate(d.block.asOf)}). This is who the number block was assigned to; numbers can be moved between carriers, and caller IDs can be faked.
+            </p>
+          </dl>
+        ) : (
+          <p className="text-sm text-zinc-600">There is no Canadian or U.S. numbering record for this area code.</p>
+        )}
+        {d.ftc.states.length > 0 && (
+          <div className="mt-5">
+            <p className="mb-3 text-sm text-zinc-600">Where FTC complainants were located (U.S. states):</p>
+            <Bars rows={d.ftc.states.map((s) => ({ label: s.state, n: s.n }))} total={d.ftc.total} />
           </div>
-        </section>
+        )}
+      </Section>
+
+      {/* 5. Same block */}
+      {d.neighbours.length > 0 && (
+        <Section title={`Other reported numbers in ${code}-${nxx}`}>
+          <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 text-sm">
+            {d.neighbours.map((x) => (
+              <li key={x.phone}>
+                <Link href={`/lookup/${x.phone}`} className="flex justify-between px-3 py-2 hover:bg-zinc-50">
+                  <span className="font-medium">{formatPhone(x.phone)}</span>
+                  <span className="text-zinc-500">{nf(x.complaints)} complaint{x.complaints === 1 ? "" : "s"}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <Link href={`/area/${code}/${nxx}`} className="mt-2 inline-block text-sm text-canada hover:underline">
+            All reported numbers in {code}-{nxx} →
+          </Link>
+        </Section>
       )}
+
+      {/* 6 + 7. Search count and "did this number call you?" (client-side: the page is edge-cached) */}
+      <NumberActivity phone={n} pretty={pretty} />
+
+      {/* Recent community reports */}
+      <Section title="Recent community reports" id="reports">
+        {d.community.recent.length > 0 ? (
+          <ul className="space-y-3">
+            {d.community.recent.map((r) => {
+              const src = reportSource(r);
+              return (
+                <li key={r.id} className="rounded-lg border border-zinc-200 p-3 text-sm">
+                  <div className="flex flex-wrap justify-between gap-2 text-xs text-zinc-500">
+                    <span>{src.label}{r.type ? ` · ${r.type}` : ""}</span>
+                    <span>{src.imported ? `imported ${formatDate(r.createdAt)}` : formatDate(r.createdAt)}</span>
+                  </div>
+                  {r.comment && <p className="mt-1 text-zinc-800">{r.comment.replace(/\s*Reported on 800notes\.com\.?\s*$/i, "")}</p>}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-sm text-zinc-600">No community reports yet.</p>
+        )}
+        <div className="mt-4">
+          <ReportForm phoneNumber={n} />
+        </div>
+      </Section>
+
+      {/* 8. What to do */}
+      <Section title="What to do">
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700">
+          <li>Don&apos;t share personal or banking details, or pay anyone, on a call you didn&apos;t expect. Hang up and call the organization back on a number you find yourself.</li>
+          <li><strong>Block it:</strong> on iPhone, open Recents, tap ⓘ next to the number, then “Block this Caller”. On Android, open the Phone app, long-press the number in recent calls, then “Block”.</li>
+          <li><strong>Report fraud</strong> to the <a className="text-canada underline" href="https://antifraudcentre-centreantifraude.ca/" rel="noopener noreferrer" target="_blank">Canadian Anti-Fraud Centre</a> (1-888-495-8501).</li>
+          <li><strong>Report telemarketing</strong> to the <a className="text-canada underline" href="https://lnnte-dncl.gc.ca/" rel="noopener noreferrer" target="_blank">National Do Not Call List</a> if you&apos;re registered and still got the call.</li>
+          <li>Add a report above so others can see it.</li>
+        </ul>
+      </Section>
+
+      {/* 9. FAQ from this number's data */}
+      {faq.length > 0 && (
+        <Section title="Questions about this number">
+          <dl className="divide-y divide-zinc-200 rounded-xl border border-zinc-200">
+            {faq.map(({ q, a }) => (
+              <div key={q} className="p-4">
+                <dt className="font-medium text-zinc-900">{q}</dt>
+                <dd className="mt-1 text-sm leading-relaxed text-zinc-600">{a}</dd>
+              </div>
+            ))}
+          </dl>
+        </Section>
+      )}
+
+      {/* 10. Data updated */}
+      <p className="mt-8 text-xs text-zinc-500">
+        Data updated: FTC complaints through {d.ftcDataThrough ? formatDate(d.ftcDataThrough) : "—"}
+        {d.block ? `; numbering records as of ${formatDate(d.block.asOf)}` : ""}; community reports live.{" "}
+        <Link href="/methodology" className="underline">How this page is built</Link>.
+      </p>
     </div>
   );
 }

@@ -53,7 +53,7 @@ function buildVerdict(result: LookupResult, pretty: string): Verdict {
 
   if (result.type === "spam") {
     const n = result.data.report_count as number;
-    const others = n === 1 ? "1 other Canadian has" : `${n} other Canadians have`;
+    const others = n === 1 ? "1 complaint or report has" : `${n.toLocaleString("en-CA")} complaints and reports have`;
     const type = (result.data.most_common_type as string | null) ?? null;
 
     if (type === "Debt Collector") {
@@ -344,9 +344,9 @@ export default async function AppResultPage({ params }: Props) {
           checked this" line would be a number we made up. */}
       <p className="mt-9 text-center text-sm leading-relaxed text-white/40">
         {reportCount > 0
-          ? `You're not alone — ${reportCount.toLocaleString("en-CA")} ${
-              reportCount === 1 ? "Canadian has" : "Canadians have"
-            } reported this number to Canadial.`
+          ? `You're not alone — this number has ${reportCount.toLocaleString("en-CA")} ${
+              reportCount === 1 ? "complaint or report" : "complaints and reports"
+            } on record (FTC complaints and community reports).`
           : "Nobody has reported this number yet. If it felt wrong, your report is what warns the next person."}
       </p>
 

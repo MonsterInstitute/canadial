@@ -71,7 +71,7 @@ function ymKey(year: number, month: number): string {
 // Throws on a database error: an empty list here would drop every month from
 // the index pages and the sitemap.
 export async function getReportableMonths(): Promise<{ year: number; month: number }[]> {
-  const rows = await all<{ ym: string }>("SELECT ym FROM monthly_reports ORDER BY ym DESC");
+  const rows = await all<{ ym: string }>("SELECT ym FROM monthly_reports2 ORDER BY ym DESC");
   const months: { year: number; month: number }[] = [];
   for (const { ym } of rows) {
     const m = ym.match(/^(\d{4})-(\d{2})$/);
@@ -93,7 +93,7 @@ export async function getMonthlyReport(
   month: number
 ): Promise<MonthlyReport | null> {
   const row = await first<{ payload: string }>(
-    "SELECT payload FROM monthly_reports WHERE ym = ?",
+    "SELECT payload FROM monthly_reports2 WHERE ym = ?",
     ymKey(year, month)
   );
   if (!row) return null;

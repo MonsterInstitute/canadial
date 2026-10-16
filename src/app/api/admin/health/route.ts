@@ -14,10 +14,10 @@ export async function GET(req: Request) {
   const res = await db
     .prepare(
       `SELECT
-         (SELECT refreshed_at FROM site_stats WHERE id = 1) AS site_stats,
-         (SELECT min(refreshed_at) FROM area_summaries) AS area_summaries_oldest,
-         (SELECT count(*) FROM area_summaries) AS area_codes,
-         (SELECT max(refreshed_at) FROM monthly_reports) AS monthly_reports`
+         (SELECT refreshed_at FROM site_stats2 WHERE id = 1) AS site_stats,
+         (SELECT min(refreshed_at) FROM area_summaries2) AS area_summaries_oldest,
+         (SELECT count(*) FROM area_summaries2) AS area_codes,
+         (SELECT max(refreshed_at) FROM monthly_reports2) AS monthly_reports`
     )
     .first<Record<string, unknown>>();
   const meta = await db.prepare("SELECT 1").run();

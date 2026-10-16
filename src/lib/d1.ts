@@ -94,3 +94,15 @@ export async function run(
     changes: res.meta.changes ?? 0,
   };
 }
+
+// A read for maintenance jobs (rollup refreshes) that legitimately scan large
+// ranges. Never for page renders: those keep the 5 s default via all()/first().
+export async function allSlow<T>(
+  sql: string,
+  params: unknown[],
+  deadlineMs: number
+): Promise<{ results: T[]; rowsRead: number }> {
+  const res = await withDeadline(sql, (await db()).prepare(sql).bind(...params).all<T>(), deadlineMs);
+  meter(res.meta);
+  return { results: res.results, rowsRead: res.meta.rows_read ?? 0 };
+}

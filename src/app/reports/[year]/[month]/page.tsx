@@ -46,7 +46,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     title: `${label} Canadian Spam Call Report`,
     description: `${count.toLocaleString(
       "en-CA"
-    )} spam numbers reported in Canada in ${label}. CRA scams, robocalls, and telemarketers — monthly data from ${SITE_NAME}'s community database.`,
+    )} phone numbers with Canadian area codes drew complaints or reports in ${label}, from FTC Do Not Call complaints and ${SITE_NAME} community reports.`,
     alternates: { canonical: `/reports/${year}/${mm}` },
   };
 }
@@ -287,11 +287,13 @@ export default async function MonthlyReportPage({ params }: Props) {
       <section className="mt-12">
         <h2 className="text-2xl font-bold tracking-tight">Methodology</h2>
         <p className="mt-3 text-sm leading-relaxed text-zinc-500">
-          Figures are drawn from community reports submitted to Canadial.com.
-          Numbers are grouped by their three-digit area code to estimate
-          province-level activity; caller-type categories reflect how reporters
-          classified each call. These are community-sourced reports, not a
-          statistical sample of all Canadian phone traffic. Updated monthly.
+          Figures cover phone numbers with Canadian area codes and combine
+          complaints filed with the U.S. Federal Trade Commission&apos;s Do Not
+          Call registry (counted by the month of the call) with community
+          reports on Canadial. Numbers are grouped by their three-digit area
+          code to estimate province-level activity; call-type categories come
+          from community reports. These are complaints and reports, not a
+          statistical sample of all Canadian phone traffic. Updated daily.
         </p>
       </section>
 

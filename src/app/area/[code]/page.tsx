@@ -53,9 +53,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   const description =
     count > 0
-      ? `Area code ${code} (${loc}): ${count} spam number${
+      ? `Area code ${code} (${loc}): ${count.toLocaleString("en-CA")} number${
           count === 1 ? "" : "s"
-        } reported by Canadians.${
+        } with complaints or reports.${
           topType ? ` Most common: ${topType}.` : ""
         } See all reported numbers.`
       : `Area code ${code} (${loc}): no spam numbers reported yet. Search any ${code} number to check if it is spam, a scam, or legitimate.`;
@@ -226,9 +226,9 @@ export default async function AreaPage({ params }: Props) {
             </span>
           </div>
           <p className="mt-3 text-sm leading-relaxed text-zinc-600">
-            Canadians in the {region ?? code} area have reported{" "}
-            <strong>{numberCount}</strong> suspicious number
-            {numberCount === 1 ? "" : "s"}.
+            <strong>{numberCount.toLocaleString("en-CA")}</strong> number
+            {numberCount === 1 ? "" : "s"} in the {region ?? code} area have FTC complaints or
+            community reports.
             {topType ? (
               <>
                 {" "}
