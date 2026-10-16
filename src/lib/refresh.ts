@@ -337,17 +337,27 @@ async function refreshHubs(names: Map<number, string>) {
   }
 }
 
-export async function refreshAll(): Promise<{ ms: number; rowsRead: number; rowsWritten: number }> {
+export const REFRESH_PARTS = ["community", "areas", "stats", "monthly", "hubs"] as const;
+export type RefreshPart = (typeof REFRESH_PARTS)[number];
+
+// The whole refresh is 2-3 minutes of database work. Callers over HTTP run it
+// one part at a time (each well under a minute), in this order: a single long
+// request was fragile — one dropped connection or slow moment lost the run.
+export async function refreshAll(
+  parts: readonly RefreshPart[] = REFRESH_PARTS
+): Promise<{ ms: number; rowsRead: number; rowsWritten: number; parts: readonly RefreshPart[] }> {
   const t0 = Date.now();
   totals.rowsRead = 0;
   totals.rowsWritten = 0;
   const names = await subjectNames();
-  await refreshCommunity(ALL);
-  await refreshAreas(null, names);
-  await refreshSiteStats(names);
-  await refreshMonthly();
-  await refreshHubs(names);
-  return { ms: Date.now() - t0, ...totals };
+  for (const part of parts) {
+    if (part === "community") await refreshCommunity(ALL);
+    else if (part === "areas") await refreshAreas(null, names);
+    else if (part === "stats") await refreshSiteStats(names);
+    else if (part === "monthly") await refreshMonthly();
+    else if (part === "hubs") await refreshHubs(names);
+  }
+  return { ms: Date.now() - t0, ...totals, parts };
 }
 
 // One number's community counters (report form, moderation).

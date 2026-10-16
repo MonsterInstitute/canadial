@@ -1,4 +1,4 @@
-import { refreshAll } from "@/lib/refresh";
+import { refreshAll, REFRESH_PARTS, type RefreshPart } from "@/lib/refresh";
 import { authorize, json } from "@/lib/admin-auth";
 
 // Rebuilds per-number counters and every materialized rollup
@@ -14,8 +14,19 @@ export const maxDuration = 300;
 export async function POST(req: Request) {
   const denied = authorize(req);
   if (denied) return denied;
+  // Optional body {"part": "<one of REFRESH_PARTS>"}; no body runs everything.
+  let part: RefreshPart | null = null;
   try {
-    return json(200, { ok: true, ...(await refreshAll()) });
+    const body = (await req.json()) as { part?: unknown };
+    if (typeof body?.part === "string") {
+      if (!(REFRESH_PARTS as readonly string[]).includes(body.part)) return json(400, { error: `part must be one of ${REFRESH_PARTS.join(", ")}` });
+      part = body.part as RefreshPart;
+    }
+  } catch {
+    // no body: run all parts
+  }
+  try {
+    return json(200, { ok: true, ...(await refreshAll(part ? [part] : undefined)) });
   } catch (e) {
     console.error("refreshAll failed:", e);
     return json(500, { ok: false, error: e instanceof Error ? e.message : String(e) });
