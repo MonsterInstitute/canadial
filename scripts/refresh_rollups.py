@@ -15,7 +15,7 @@ from canadial_admin import post_status  # noqa: E402
 # One part per request, in order (see REFRESH_PARTS in src/lib/refresh.ts):
 # each is well under a minute, where the whole refresh in one request was
 # fragile. A failed part is retried once, then the step fails naming it.
-for part in ["community", "areas", "stats", "monthly", "hubs"]:
+for part in ["community", "areas", "stats", "monthly", "hubs", "sitemap"]:
     for attempt in (1, 2):
         status, res = post_status("/api/admin/refresh", {"part": part})
         print(part, status, res)
