@@ -9,13 +9,17 @@ ftc_subjects, and the ftc_* columns of numbers (upserted, so community
 counters on existing rows are untouched).
 
 Definitions — the same rules src/lib/ftc-ingest.ts applies to each new day:
-  * A complaint is one CSV row. Identical rows (all eight fields) are one
-    complaint, whichever file they appear in.
+  * A complaint is one CSV row. An identical row (all eight fields) already
+    seen in the same file or in any of the previous DEDUPE_FILES stored files
+    is the same complaint republished, and counts once. (The FTC republishes
+    some rows in the next day's file; measured over the full archive, almost
+    all duplicates are in the next file — see duplicate_rows_* in stats.)
   * Phone: digits only; 11 digits with a leading 1 drop the 1; must then be
     10 digits with an area code starting 2-9. Anything else is counted as
     invalid and skipped.
-  * Date: the call date (Violation_Date) when it parses and falls between
-    2000-01-01 and the file's own date; otherwise the complaint's
+  * Dates are "YYYY-MM-DD hh:mm:ss" or, in some files, "M/D/YYYY h:mm".
+  * Date: the call date (Violation_Date) when it parses and falls within the
+    365 days up to the file's own date; otherwise the complaint's
     Created_Date. Months and first/last seen use it.
   * State: Consumer_State trimmed; empty is not counted.
   * Subject: Subject trimmed; empty becomes "(not given)".
@@ -28,14 +32,19 @@ import json
 import os
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+from datetime import date, timedelta
 
 RAW, OUT = sys.argv[1], sys.argv[2]
 os.makedirs(OUT, exist_ok=True)
 HEADER = ["Company_Phone_Number", "Created_Date", "Violation_Date", "Consumer_City",
           "Consumer_State", "Consumer_Area_Code", "Subject", "Recorded_Message_Or_Robocall"]
 NO_SUBJECT = "(not given)"
-DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+DEDUPE_FILES = 7
+DEDUPE_SEARCH_DAYS = 21  # the daily ingest looks this far back for those files
+MAX_CALL_AGE_DAYS = 365
+ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+US = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})")
 
 
 def phone(raw):
@@ -46,11 +55,18 @@ def phone(raw):
 
 
 def yyyymmdd(s):
-    m = DATE.match(s or "")
-    if not m:
+    s = s or ""
+    m = ISO.match(s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = US.match(s)
+        if not m:
+            return None
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mo <= 12 and 1 <= d <= 31 and 2000 <= y <= 2099):
         return None
-    v = int(m.group(1) + m.group(2) + m.group(3))
-    return v if 20000101 <= v <= 20991231 else None
+    return y * 10000 + mo * 100 + d
 
 
 files = sorted(f for f in os.listdir(RAW) if re.fullmatch(r"DNC_Complaint_Numbers_\d{4}-\d{2}-\d{2}\.csv", f))
@@ -58,7 +74,7 @@ files = sorted(f for f in os.listdir(RAW) if re.fullmatch(r"DNC_Complaint_Number
 # 1 GB; a collision at that size is ~1e-5 likely and would drop one row).
 seen = set()
 stats = Counter()
-prev_file = set()     # hashes from the previous file, to see where duplicates come from
+recent = deque(maxlen=DEDUPE_FILES)   # (file date, hash set) of the previous stored files
 total = defaultdict(int); robo = defaultdict(int)
 first = {}; last = {}
 monthly = defaultdict(int); states = defaultdict(int); subjects = defaultdict(int)
@@ -67,6 +83,9 @@ ingest_log = []      # one row per file: what the daily job's ftc_ingest_log hol
 
 for f in files:
     file_day = int(f[22:32].replace("-", ""))
+    oldest_call = int((date.fromisoformat(f[22:32]) - timedelta(days=MAX_CALL_AGE_DAYS)).strftime("%Y%m%d"))
+    window_start = date.fromisoformat(f[22:32]) - timedelta(days=DEDUPE_SEARCH_DAYS)
+    window = [h for d, h in recent if d >= window_start]
     with open(os.path.join(RAW, f), newline="", encoding="utf-8", errors="replace") as fh:
         reader = csv.reader(fh)
         header = next(reader, None)
@@ -83,21 +102,28 @@ for f in files:
                 stats["malformed_rows"] += 1
                 continue
             digest = int.from_bytes(hashlib.blake2b("\x1f".join(row).encode(), digest_size=8).digest(), "big")
-            if digest in seen:
+            # The window holds every row of the previous files, duplicates
+            # included, exactly as the daily ingest reads them back from R2.
+            in_file = digest in this_file
+            this_file.add(digest)
+            if in_file or any(digest in w for w in window):
                 stats["duplicate_rows"] += 1
-                if digest in this_file:
+                if in_file:
                     stats["duplicate_rows_same_file"] += 1
-                elif digest in prev_file:
+                elif window and digest in window[-1]:
                     stats["duplicate_rows_previous_file"] += 1
                 continue
+            if digest in seen:
+                # identical to a row further back than the window: kept,
+                # counted here so the choice of window is measured
+                stats["repeats_beyond_window"] += 1
             seen.add(digest)
-            this_file.add(digest)
             p = phone(row[0])
             if p is None:
                 stats["invalid_phone_rows"] += 1
                 continue
             day = yyyymmdd(row[2])
-            if day is None or day > file_day:
+            if day is None or day > file_day or day < oldest_call:
                 day = yyyymmdd(row[1])
                 if day is None:
                     stats["undated_rows"] += 1
@@ -117,7 +143,7 @@ for f in files:
             sub = row[6].strip() or NO_SUBJECT
             sid = subject_ids.setdefault(sub, len(subject_ids) + 1)
             subjects[(p, sid)] += 1
-        prev_file = this_file
+        recent.append((date.fromisoformat(f[22:32]), this_file))
     with open(os.path.join(RAW, f), "rb") as fh:
         sha = hashlib.sha256(fh.read()).hexdigest()
     day_iso = f[22:32]

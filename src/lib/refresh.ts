@@ -21,6 +21,11 @@ import { run } from "./d1";
 // phone >= 2000000000 and the area code is phone / 10000000.
 
 // Rollups aggregate whole tables: seconds of database time, never on a render.
+//
+// Every UPDATE/upsert below only touches rows whose value actually changes.
+// D1 bills each touched row as a write, and numbers holds ~7.6M rows once the
+// FTC aggregates are in: an unguarded daily rewrite would be ~230M writes a
+// month for no change at all.
 const REFRESH_DEADLINE_MS = 60_000;
 
 type Scope = { where: string; params: unknown[] };
@@ -28,7 +33,15 @@ const ALL: Scope = { where: "", params: [] };
 const phoneScope = (phone: number): Scope => ({ where: "AND phone = ?1", params: [phone] });
 const codeScope = (code: number): Scope => ({ where: "AND phone / 10000000 = ?1", params: [code] });
 
-const exec = (sql: string, params: unknown[] = []) => run(sql, params, REFRESH_DEADLINE_MS);
+// Totals for the current refresh, reported by refreshAll() so the write
+// guards above are measured, not assumed.
+const totals = { rowsRead: 0, rowsWritten: 0 };
+const exec = async (sql: string, params: unknown[] = []) => {
+  const r = await run(sql, params, REFRESH_DEADLINE_MS);
+  totals.rowsRead += r.rowsRead;
+  totals.rowsWritten += r.rowsWritten;
+  return r;
+};
 
 async function refreshNumbers(s: Scope) {
   await exec(
@@ -38,7 +51,10 @@ async function refreshNumbers(s: Scope) {
      ON CONFLICT (phone) DO UPDATE SET
        comm_total = excluded.comm_total,
        comm_spam  = excluded.comm_spam,
-       comm_last  = excluded.comm_last`,
+       comm_last  = excluded.comm_last
+     WHERE numbers.comm_total IS NOT excluded.comm_total
+        OR numbers.comm_spam  IS NOT excluded.comm_spam
+        OR numbers.comm_last  IS NOT excluded.comm_last`,
     s.params
   );
   await exec(
@@ -63,7 +79,8 @@ async function refreshNumbers(s: Scope) {
        FROM t
      )
      UPDATE numbers SET comm_top_type = ranked.type
-     FROM ranked WHERE ranked.phone = numbers.phone AND ranked.rn = 1`,
+     FROM ranked WHERE ranked.phone = numbers.phone AND ranked.rn = 1
+       AND numbers.comm_top_type IS NOT ranked.type`,
     s.params
   );
   await exec(
@@ -76,7 +93,8 @@ async function refreshNumbers(s: Scope) {
   // organizations are added by the sitemap query itself.
   await exec(
     `UPDATE numbers SET indexable = CASE WHEN comm_total >= 2 AND phone >= 2000000000 THEN 1 ELSE 0 END
-     WHERE 1 = 1 ${s.where}`,
+     WHERE indexable IS NOT (CASE WHEN comm_total >= 2 AND phone >= 2000000000 THEN 1 ELSE 0 END)
+       ${s.where}`,
     s.params
   );
 }
@@ -234,13 +252,15 @@ async function refreshMonthlyReports() {
   );
 }
 
-export async function refreshAll(): Promise<{ ms: number }> {
+export async function refreshAll(): Promise<{ ms: number; rowsRead: number; rowsWritten: number }> {
   const t0 = Date.now();
+  totals.rowsRead = 0;
+  totals.rowsWritten = 0;
   await refreshNumbers(ALL);
   await refreshAreaSummaries(ALL);
   await refreshSiteStats();
   await refreshMonthlyReports();
-  return { ms: Date.now() - t0 };
+  return { ms: Date.now() - t0, ...totals };
 }
 
 // One number's counters: reads that number's reports only.

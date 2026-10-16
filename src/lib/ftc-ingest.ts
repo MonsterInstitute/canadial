@@ -11,17 +11,24 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 //
 // The rules are the ones scripts/ftc_aggregate.py used for the backfill —
 // keep the two in step:
-//   * a complaint is one CSV row; identical rows within the file count once
-//     (the backfill measured no duplicates across files: see its stats);
+//   * a complaint is one CSV row; a row identical to one in the same file or in
+//     the previous DEDUPE_FILES stored files is a republished complaint and
+//     counts once (the FTC repeats ~27k rows a year in the next day's file);
 //   * phone: digits; 11 with a leading 1 drop it; then 10 digits, area code 2-9;
-//   * date: Violation_Date when it parses and isn't after the file's date,
-//     else Created_Date;
+//   * dates are "YYYY-MM-DD hh:mm:ss" or, in some files, "M/D/YYYY h:mm";
+//   * date: Violation_Date when it parses and falls in the 365 days up to the
+//     file's date, else Created_Date;
 //   * state: Consumer_State trimmed, empty not counted;
 //   * subject: Subject trimmed, empty is "(not given)";
 //   * robocall: Recorded_Message_Or_Robocall == "Y".
 
 const HEADER = "Company_Phone_Number,Created_Date,Violation_Date,Consumer_City,Consumer_State,Consumer_Area_Code,Subject,Recorded_Message_Or_Robocall";
 const NO_SUBJECT = "(not given)";
+const DEDUPE_FILES = 7;
+const MAX_CALL_AGE_DAYS = 365;
+// How far back to look for the previous DEDUPE_FILES stored files; the FTC
+// skips weekends and holidays, so 7 files span 9-11 calendar days.
+const DEDUPE_SEARCH_DAYS = 21;
 // Rows per INSERT. Values are inlined (integers, and strings escaped below)
 // rather than bound: D1 allows 100 bound parameters per statement, which
 // would turn a day into thousands of statements; this keeps it to dozens,
@@ -73,10 +80,35 @@ function phone(raw: string): number | null {
 }
 
 function yyyymmdd(s: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (!m) return null;
-  const v = Number(m[1] + m[2] + m[3]);
-  return v >= 20000101 && v <= 20991231 ? v : null;
+  let y: number, mo: number, d: number;
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  else {
+    m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+    if (!m) return null;
+    [mo, d, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  }
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < 2000 || y > 2099) return null;
+  return y * 10000 + mo * 100 + d;
+}
+
+function shiftDays(day: string, days: number): string {
+  const t = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+  return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+// Row keys of the previous DEDUPE_FILES stored files, read from R2.
+async function recentRowKeys(bucket: R2Bucket, day: string): Promise<Set<string>> {
+  const keys = new Set<string>();
+  let files = 0;
+  for (let back = 1; back <= DEDUPE_SEARCH_DAYS && files < DEDUPE_FILES; back++) {
+    const obj = await bucket.get(rawKey(shiftDays(day, -back)));
+    if (!obj) continue;
+    files++;
+    const rows = parseCsv(await obj.text());
+    for (let i = 1; i < rows.length; i++) if (rows[i].length === 8) keys.add(rows[i].join("\u001f"));
+  }
+  return keys;
 }
 
 const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
@@ -101,7 +133,9 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
   const rows = parseCsv(text);
   if (rows[0]?.join(",") !== HEADER) throw new Error(`${day}: unexpected header`);
   const fileDay = Number(day.replace(/-/g, ""));
+  const oldestCall = Number(shiftDays(day, -MAX_CALL_AGE_DAYS).replace(/-/g, ""));
 
+  const recent = await recentRowKeys(bucket, day);
   const seen = new Set<string>();
   const total = new Map<number, number>();
   const robo = new Map<number, number>();
@@ -120,12 +154,12 @@ export async function ingestFtcDay(day: string): Promise<IngestResult> {
     records++;
     if (r.length !== 8) continue;
     const key = r.join("\u001f");
-    if (seen.has(key)) continue;
+    if (seen.has(key) || recent.has(key)) continue;
     seen.add(key);
     const p = phone(r[0]);
     if (p === null) continue;
     let d = yyyymmdd(r[2]);
-    if (d === null || d > fileDay) d = yyyymmdd(r[1]);
+    if (d === null || d > fileDay || d < oldestCall) d = yyyymmdd(r[1]);
     if (d === null) continue;
     complaints++;
     total.set(p, (total.get(p) ?? 0) + 1);

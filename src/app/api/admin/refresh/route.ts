@@ -15,8 +15,7 @@ export async function POST(req: Request) {
   const denied = authorize(req);
   if (denied) return denied;
   try {
-    const { ms } = await refreshAll();
-    return json(200, { ok: true, ms });
+    return json(200, { ok: true, ...(await refreshAll()) });
   } catch (e) {
     console.error("refreshAll failed:", e);
     return json(500, { ok: false, error: e instanceof Error ? e.message : String(e) });

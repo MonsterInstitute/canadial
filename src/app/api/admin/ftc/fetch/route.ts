@@ -58,7 +58,9 @@ export async function POST(req: Request) {
   let lastError = "";
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
-      const res = await fetch(url, {
+      // Retries carry a query string: ftc.gov's CDN can hold a cached 403 for
+      // a file it serves fine to everyone else (seen on 27 of ~1,100 files).
+      const res = await fetch(attempt === 1 ? url : `${url}?attempt=${attempt}-${Date.now()}`, {
         headers: { "User-Agent": "canadial-data/1.0 (+https://www.canadial.com)" },
         signal: AbortSignal.timeout(30_000),
       });
