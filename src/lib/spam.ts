@@ -92,23 +92,6 @@ export async function getAreaSummary(
   };
 }
 
-// The number pages worth listing in the sitemap: numbers reported more than
-// once (numbers.listed, set by refreshAll()), plus every verified
-// organization. The ~440k single-report numbers are deliberately left out —
-// most share a handful of boilerplate comment texts and Google already
-// declined to index them once. Phase 5 revisits this with real per-number data.
-//
-// One partial-index read per sitemap render (daily).
-export async function getIndexableNumbers(): Promise<string[]> {
-  const rows = await all<{ phone: number }>(
-    `SELECT phone FROM numbers WHERE listed = 1
-     UNION
-     SELECT phone FROM organizations WHERE phone >= 2000000000
-     ORDER BY phone`
-  );
-  return rows.map((r) => String(r.phone));
-}
-
 export type SiteStats = {
   totalNumbers: number;
   totalReports: number;

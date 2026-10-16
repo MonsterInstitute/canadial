@@ -110,16 +110,6 @@ async function refreshCommunity(s: Scope) {
        AND numbers.c_top_type IS NOT ranked.type`,
     s.params
   );
-  // Sitemap flag (interim, until Phase 5 shards the sitemap): numbers with at
-  // least 10 FTC complaints, 2 community reports, or a verified organization
-  // (added by the sitemap query itself). ~26k URLs, one sitemap file.
-  await exec(
-    `UPDATE numbers SET listed = CASE
-       WHEN phone >= 2000000000 AND (ftc_total >= 10 OR c_total >= 2) THEN 1 ELSE 0 END
-     WHERE listed IS NOT (CASE
-       WHEN phone >= 2000000000 AND (ftc_total >= 10 OR c_total >= 2) THEN 1 ELSE 0 END) ${s.where}`,
-    s.params
-  );
 }
 
 type AreaPayload = {
@@ -346,7 +336,63 @@ async function refreshHubs(names: Map<number, string>) {
   }
 }
 
-export const REFRESH_PARTS = ["community", "areas", "stats", "monthly", "hubs"] as const;
+// Which number pages go in the sitemap: every page with data unique to that
+// number —
+//   * 2+ FTC complaints or community reports (own timeline, date range,
+//     category mix and complainant states),
+//   * any community report,
+//   * a single complaint about a number in a block that isn't assigned to any
+//     carrier (the page states a number-specific spoofing fact).
+// Verified organizations are added by the sitemap query. Left out: numbers
+// with exactly one complaint in an assigned block (6.3M), whose pages differ
+// only in a date, a category and a state.
+const LISTED = "phone >= 2000000000 AND (ftc_total + c_total >= 2 OR c_total >= 1)";
+const UNASSIGNED_SINGLE = `ftc_total + c_total = 1 AND (
+  EXISTS (SELECT 1 FROM number_blocks b WHERE b.npanxx = numbers.phone / 10000 AND b.status = 'unassigned')
+  OR EXISTS (SELECT 1 FROM number_blocks_x x WHERE x.npanxxx = numbers.phone / 1000 AND x.status = 'available'))`;
+const SHARD_SIZE = 45_000;
+
+async function refreshSitemap() {
+  // Only rows whose flag changes are written.
+  await exec(`UPDATE numbers SET listed = 1 WHERE listed = 0 AND ${LISTED}`);
+  await exec(`UPDATE numbers SET listed = 1 WHERE listed = 0 AND phone >= 2000000000 AND ${UNASSIGNED_SINGLE}`);
+  await exec(`UPDATE numbers SET listed = 0 WHERE listed = 1 AND NOT (${LISTED}) AND NOT (${UNASSIGNED_SINGLE})`);
+
+  type Shard = { shard: number; first: number; last: number; n: number; lastmod: string | null };
+  const numberShards = await read<Shard>(
+    `SELECT shard, min(phone) AS first, max(phone) AS last, count(*) AS n, max(d) AS lastmod FROM (
+       SELECT phone, (row_number() OVER (ORDER BY phone) - 1) / ${SHARD_SIZE} AS shard,
+              max(coalesce(printf('%04d-%02d-%02d', ftc_last / 10000, ftc_last / 100 % 100, ftc_last % 100), ''), coalesce(substr(c_last, 1, 10), '')) AS d
+       FROM numbers WHERE listed = 1)
+     GROUP BY shard ORDER BY shard`
+  );
+  // NPA-NXX block pages worth listing: blocks with 2+ listed numbers.
+  const blockShards = await read<Shard>(
+    `SELECT shard, min(b) AS first, max(b) AS last, count(*) AS n, max(d) AS lastmod FROM (
+       SELECT b, d, (row_number() OVER (ORDER BY b) - 1) / ${SHARD_SIZE} AS shard FROM (
+         SELECT phone / 10000 AS b, max(printf('%04d-%02d-%02d', ftc_last / 10000, ftc_last / 100 % 100, ftc_last % 100)) AS d
+         FROM numbers WHERE listed = 1 GROUP BY 1 HAVING count(*) >= 2))
+     GROUP BY shard ORDER BY shard`
+  );
+  const current = await read<Shard & { kind: string }>("SELECT kind, shard, first, last, n, lastmod FROM sitemap_shards ORDER BY kind, shard");
+  const next = [
+    ...numberShards.map((x) => ({ ...x, kind: "numbers" })),
+    ...blockShards.map((x) => ({ ...x, kind: "blocks" })),
+  ];
+  const key = (x: Shard & { kind: string }) => `${x.kind}|${x.shard}|${x.first}|${x.last}|${x.n}|${x.lastmod}`;
+  if (current.map(key).join() !== next.sort((a, b) => a.kind.localeCompare(b.kind) || a.shard - b.shard).map(key).join()) {
+    await batch([
+      { sql: "DELETE FROM sitemap_shards", params: [] },
+      ...next.map((x) => ({
+        sql: "INSERT INTO sitemap_shards (kind, shard, first, last, n, lastmod) VALUES (?, ?, ?, ?, ?, ?)",
+        params: [x.kind, x.shard, x.first, x.last, x.n, x.lastmod],
+      })),
+    ]);
+    totals.rowsWritten += next.length;
+  }
+}
+
+export const REFRESH_PARTS = ["community", "areas", "stats", "monthly", "hubs", "sitemap"] as const;
 export type RefreshPart = (typeof REFRESH_PARTS)[number];
 
 // The whole refresh is 2-3 minutes of database work. Callers over HTTP run it
@@ -365,6 +411,7 @@ export async function refreshAll(
     else if (part === "stats") await refreshSiteStats(names);
     else if (part === "monthly") await refreshMonthly();
     else if (part === "hubs") await refreshHubs(names);
+    else if (part === "sitemap") await refreshSitemap();
   }
   return { ms: Date.now() - t0, ...totals, parts };
 }

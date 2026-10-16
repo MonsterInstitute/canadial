@@ -30,9 +30,6 @@ jobs:
       MAX_ROWS_PER_RENDER: '250'
       # Daily rollups must have run within this window.
       MAX_ROLLUP_AGE_HOURS: '36'
-      # Core pages, area codes and the number pages worth indexing. The bound
-      # catches a wholesale relisting of every number page, not growth.
-      MAX_SITEMAP_URLS: '30000'
     steps:
       - name: Database size and rollup freshness
         run: |
@@ -93,21 +90,30 @@ jobs:
           done
           exit $fail
 
-      - name: Crawl surface is bounded
+      # /sitemap.xml is a sitemap index (Phase 5): core pages plus number and
+      # NPA-NXX block shards of at most 45,000 URLs each (Google's limit is
+      # 50,000). Check the index, the core sitemap and every shard's size.
+      - name: Sitemap index and shards are well-formed
         run: |
-          curl -fsS "$SITE/sitemap.xml" -o /tmp/sitemap.xml
-          n=$(grep -c '<loc>' /tmp/sitemap.xml)
-          echo "sitemap URLs: $n / $MAX_SITEMAP_URLS"
-          [ "$n" -lt "$MAX_SITEMAP_URLS" ] \
-            || { echo "::error::sitemap.xml lists $n URLs."; exit 1; }
+          curl -fsS "$SITE/sitemap.xml" -o /tmp/index.xml
+          grep -q '<sitemapindex' /tmp/index.xml || { echo "::error::/sitemap.xml is not a sitemap index"; exit 1; }
+          shards=$(grep -oE '<loc>[^<]+</loc>' /tmp/index.xml | sed -E 's#</?loc>##g')
+          echo "$shards" | wc -l | xargs echo "sitemaps listed:"
+          total=0
+          for u in $shards; do
+            n=$(curl -fsS "$u" | grep -c '<loc>')
+            echo "$u: $n URLs"
+            [ "$n" -le 45000 ] || { echo "::error::$u lists $n URLs (max 45,000)"; exit 1; }
+            [ "$n" -gt 0 ] || { echo "::error::$u is empty"; exit 1; }
+            total=$((total + n))
+          done
+          echo "total URLs: $total"
+          curl -fsS "$SITE/sitemaps/core.xml" -o /tmp/core.xml
           # A NANP area code never starts with 0 or 1.
-          bad=$(grep -oE '/area/[0-9]{3}' /tmp/sitemap.xml | sed 's|/area/||' | grep -cE '^[01]' || true)
-          echo "impossible area codes: $bad"
-          [ "$bad" -eq 0 ] \
-            || { echo "::error::sitemap.xml lists $bad impossible area codes (leading 0 or 1)."; exit 1; }
-          # /app is a parallel UI and is noindex; it must never be advertised here.
-          grep -q '/app' /tmp/sitemap.xml \
-            && { echo "::error::sitemap.xml contains /app URLs."; exit 1; } || true
+          bad=$(grep -oE '/area/[0-9]{3}' /tmp/core.xml | sed 's|/area/||' | grep -cE '^[01]' || true)
+          [ "$bad" -eq 0 ] || { echo "::error::core sitemap lists $bad impossible area codes"; exit 1; }
+          # /app is a parallel UI and is noindex; it must never be advertised.
+          grep -q '/app' /tmp/core.xml && { echo "::error::core sitemap contains /app URLs"; exit 1; } || true
 
       - name: Site is serving real data
         run: |

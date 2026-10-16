@@ -55,9 +55,15 @@ adding a read: number pages are multiplied by ~450k.
    `REVALIDATE_SECRET` for revalidate) and fail closed: unset secret means
    503, never open access.
 
-5. **Keep the crawl surface bounded.** `sitemap.xml` lists core pages, area
-   codes and the number pages worth indexing (reported 2+ times, or a verified
-   organization) — ~15k URLs, one partial-index read.
+5. **The sitemap lists every page with data unique to it, in shards.**
+   `/sitemap.xml` is a sitemap index: `/sitemaps/core.xml` (hubs, reports,
+   area codes, trust pages, organizations) plus `/sitemaps/numbers/<n>.xml`
+   and `/sitemaps/blocks/<n>.xml`, at most 45,000 URLs each. Which numbers
+   are listed is `numbers.listed`, set by the "sitemap" refresh part (see
+   LISTED in `src/lib/refresh.ts`): 2+ complaints or reports, any community
+   report, or a single complaint in an unassigned block. Shard boundaries are
+   materialized in `sitemap_shards`, so a shard is one partial-index range.
+   `lastmod` is always a real data date.
 
 6. **A failed read throws; it is never "no data".** `src/lib/d1.ts` throws on
    every error and gives every query a 5 s deadline. An empty result during an
